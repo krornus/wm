@@ -1,0 +1,1 @@
+exec cargo run > log
