@@ -1,127 +1,17 @@
 use std::ptr;
 use std::sync::Arc;
+use std::process::Command;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::os::unix::prelude::{AsRawFd, RawFd};
 
-use libc;
-use signal_hook::consts::signal::*;
-use thiserror::Error;
+use fork::{Fork};
 use xcb::{self, x};
-use xkbcommon::xkb;
-use subprocess::Exec;
+use xkbcommon::xkb::Keysym;
+use signal_hook::consts::signal::*;
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("a window manager is already running")]
-    AlreadyRunning,
-    #[error("screen not found")]
-    MissingScreen,
-    #[error("XKB version unsupported")]
-    XKBUnsupported,
-    #[error("Unknown keyboard device")]
-    UnknownKeyboard,
-    #[error("failed to register signal handler")]
-    SignalError(std::io::Error),
-    #[error("failed to connect to X11 server")]
-    ConnectionError(#[from] xcb::ConnError),
-    #[error("io error")]
-    IoError(#[from] std::io::Error),
-    #[error("xcb error")]
-    XCBError(#[from] xcb::Error),
-    #[error("protocol error")]
-    ProtocolError(#[from] xcb::ProtocolError),
-    #[error("process error")]
-    ProcessError(#[from] subprocess::PopenError),
-}
-
-struct Keyboard {
-    state: xkb::State,
-}
-
-impl Keyboard {
-    pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
-        Self::from_id(conn, Self::core_id(conn)?)
-    }
-
-    pub fn from_id(conn: &xcb::Connection, id: i32) -> Result<Self, Error> {
-        Self::select(conn)?;
-
-        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        let keymap =
-            xkb::x11::keymap_new_from_device(&context, conn, id, xkb::KEYMAP_COMPILE_NO_FLAGS);
-
-        let state = xkb::x11::state_new_from_device(&keymap, conn, id);
-
-        Ok(Keyboard { state: state })
-    }
-
-    fn core_id(conn: &xcb::Connection) -> Result<i32, Error> {
-        let cookie = conn.send_request(&xcb::xkb::UseExtension {
-            wanted_major: xkb::x11::MIN_MAJOR_XKB_VERSION,
-            wanted_minor: xkb::x11::MIN_MINOR_XKB_VERSION,
-        });
-
-        let version = conn.wait_for_reply(cookie)?;
-        if !version.supported() {
-            return Err(Error::XKBUnsupported);
-        }
-
-        let id = xkb::x11::get_core_keyboard_device_id(conn);
-        if id < 0 {
-            Err(Error::UnknownKeyboard)
-        } else {
-            Ok(id)
-        }
-    }
-
-    fn select(conn: &xcb::Connection) -> Result<(), Error> {
-        /* c equivalent -- xcb_xkb_select_events */
-        let events = xcb::xkb::EventType::NEW_KEYBOARD_NOTIFY
-            | xcb::xkb::EventType::MAP_NOTIFY
-            | xcb::xkb::EventType::STATE_NOTIFY;
-
-        let map_parts = xcb::xkb::MapPart::KEY_TYPES
-            | xcb::xkb::MapPart::KEY_SYMS
-            | xcb::xkb::MapPart::MODIFIER_MAP
-            | xcb::xkb::MapPart::EXPLICIT_COMPONENTS
-            | xcb::xkb::MapPart::KEY_ACTIONS
-            | xcb::xkb::MapPart::KEY_BEHAVIORS
-            | xcb::xkb::MapPart::VIRTUAL_MODS
-            | xcb::xkb::MapPart::VIRTUAL_MOD_MAP;
-
-        let spec = unsafe { std::mem::transmute::<_, u32>(xcb::xkb::Id::UseCoreKbd) };
-
-        let cookie = conn.send_request_checked(&xcb::xkb::SelectEvents {
-            device_spec: spec as xcb::xkb::DeviceSpec,
-            affect_which: events,
-            clear: xcb::xkb::EventType::empty(),
-            select_all: events,
-            affect_map: map_parts,
-            map: map_parts,
-            details: &[],
-        });
-
-        conn.check_request(cookie)?;
-
-        Ok(())
-    }
-
-    pub fn update_mask(&mut self, ev: &xcb::xkb::StateNotifyEvent) {
-        self.state.update_mask(
-            ev.base_mods().bits() as xkb::ModMask,
-            ev.latched_mods().bits() as xkb::ModMask,
-            ev.locked_mods().bits() as xkb::ModMask,
-            ev.base_group() as xkb::LayoutIndex,
-            ev.latched_group() as xkb::LayoutIndex,
-            ev.locked_group() as xkb::LayoutIndex,
-        );
-    }
-
-    pub fn keysym(&self, ev: &xcb::x::KeyPressEvent) -> xkbcommon::xkb::Keysym {
-        self.state.key_get_one_sym(ev.detail() as u32)
-    }
-}
+use crate::error::Error;
+use crate::keyboard::Keyboard;
 
 pub struct WindowManager {
     conn: xcb::Connection,
@@ -132,7 +22,8 @@ pub struct WindowManager {
 }
 
 pub enum Event {
-    KeyPress(x::KeyButMask, xkbcommon::xkb::Keysym),
+    KeyPress(x::KeyButMask, Keysym),
+    Map(x::Window),
 }
 
 impl WindowManager {
@@ -177,27 +68,34 @@ impl WindowManager {
             xcb::Event::Xkb(xcb::xkb::Event::StateNotify(ref e)) => {
                 self.keyboard.update_mask(e);
                 Ok(None)
-            }
+            },
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 Ok(Some(Event::KeyPress(e.state(), self.keyboard.keysym(e))))
-            }
+            },
+            xcb::Event::X(xcb::x::Event::MapRequest(e)) => {
+                Ok(Some(Event::Map(e.window())))
+            },
             _ => Ok(None),
         }
     }
 
     pub fn spawn(&self, cmd: &str) -> Result<(), Error> {
-        println!("execute: {}", cmd);
-        Exec::shell(cmd)
-            // .stdout(subprocess::NullFile)
-            // .stderr(subprocess::NullFile)
-            // .stdin(subprocess::NullFile)
-            .detached()
-            .popen()?;
+        if let Some(args) = shlex::split(cmd) {
+            if let Ok(Fork::Child) = fork::fork() {
+                fork::setsid()
+                    .expect("setsid failed");
+
+                Command::new(&args[0])
+                    .args(&args[1..])
+                    .spawn()
+                    .expect(&format!("process failed: {}", cmd));
+
+            }
+        }
 
         Ok(())
     }
 
-    /* cleanup all dead child processes */
     fn reap() -> Result<bool, Error> {
         let mut zombie = false;
 
@@ -236,11 +134,31 @@ impl WindowManager {
         let cookie = self.conn.send_request_checked(&x::ChangeWindowAttributes {
             window: self.root,
             value_list: &[xcb::x::Cw::EventMask(
-                x::EventMask::SUBSTRUCTURE_REDIRECT | x::EventMask::KEY_PRESS,
+                x::EventMask::SUBSTRUCTURE_REDIRECT |
+                x::EventMask::KEY_PRESS,
             )],
         });
 
         self.conn.check_request(cookie)?;
+        Ok(())
+    }
+
+    pub fn map(&mut self, win: x::Window) -> Result<(), Error> {
+        let a = self.conn.send_request_checked(&x::ChangeWindowAttributes {
+            window: win,
+            value_list: &[xcb::x::Cw::EventMask(
+                x::EventMask::SUBSTRUCTURE_REDIRECT |
+                x::EventMask::KEY_PRESS,
+            )],
+        });
+
+        let b = self.conn.send_request_checked(&x::MapWindow {
+            window: win,
+        });
+
+        self.conn.check_request(a)?;
+        self.conn.check_request(b)?;
+
         Ok(())
     }
 }
@@ -252,7 +170,7 @@ impl AsRawFd for WindowManager {
 }
 
 pub struct KeyManager<T> {
-    map: HashMap<(x::KeyButMask, xkbcommon::xkb::Keysym), T>,
+    map: HashMap<(x::KeyButMask, Keysym), T>,
 }
 
 impl<T: Copy> KeyManager<T> {
@@ -262,11 +180,11 @@ impl<T: Copy> KeyManager<T> {
         }
     }
 
-    pub fn add(&mut self, m: x::KeyButMask, k: xkbcommon::xkb::Keysym, v: T) {
+    pub fn add(&mut self, m: x::KeyButMask, k: Keysym, v: T) {
         self.map.insert((m, k), v);
     }
 
-    pub fn get(&self, m: x::KeyButMask, k: xkbcommon::xkb::Keysym) -> Option<T> {
+    pub fn get(&self, m: x::KeyButMask, k: Keysym) -> Option<T> {
         self.map.get(&(m, k)).copied()
     }
 }

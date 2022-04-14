@@ -3,6 +3,10 @@ use xcb::x::KeyButMask;
 use xkbcommon::xkb::keysyms::*;
 
 mod wm;
+mod error;
+mod keyboard;
+
+use crate::error::Error;
 
 /// Rust window manager
 #[derive(Parser, Debug)]
@@ -15,7 +19,7 @@ enum Commands {
     Execute(&'static str),
 }
 
-fn run(conn: &mut wm::WindowManager) -> Result<(), wm::Error> {
+fn run(conn: &mut wm::WindowManager) -> Result<(), Error> {
 
     let mut km = wm::KeyManager::new();
     km.add(KeyButMask::MOD4, KEY_q, Commands::Exit);
@@ -31,6 +35,9 @@ fn run(conn: &mut wm::WindowManager) -> Result<(), wm::Error> {
                     None => continue,
                 }
             },
+            Some(wm::Event::Map(w)) => {
+                conn.map(w)?
+            },
             _ => continue,
         }
     }
@@ -39,8 +46,10 @@ fn run(conn: &mut wm::WindowManager) -> Result<(), wm::Error> {
 }
 
 fn main() {
-    let args = Args::parse();
-    let mut conn = wm::WindowManager::connect(None).expect("failed to connect to X11 server");
+    let _args = Args::parse();
+    let mut conn = wm::WindowManager::connect(None)
+        .expect("failed to connect to X11 server");
 
-    run(&mut conn).expect("window manager error");
+    run(&mut conn)
+        .expect("window manager error");
 }
