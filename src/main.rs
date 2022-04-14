@@ -8,6 +8,9 @@ mod keyboard;
 
 use crate::error::Error;
 
+/// https://www.x.org/releases/X11R7.7/doc/libxcb/tutorial/index.html#wm
+/// https://jichu4n.com/posts/how-x-window-managers-work-and-how-to-write-one-part-iii/
+
 /// Rust window manager
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]

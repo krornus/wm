@@ -122,7 +122,9 @@ impl WindowManager {
     fn lock(&mut self) -> Result<(), Error> {
         let cookie = self.conn.send_request_checked(&x::ChangeWindowAttributes {
             window: self.root,
-            value_list: &[xcb::x::Cw::EventMask(x::EventMask::SUBSTRUCTURE_REDIRECT)],
+            value_list: &[xcb::x::Cw::EventMask(
+                x::EventMask::SUBSTRUCTURE_REDIRECT
+            )],
         });
 
         self.conn
