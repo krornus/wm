@@ -1,12 +1,15 @@
 use clap::Parser;
 use xcb::x::KeyButMask;
-use xkbcommon::xkb::keysyms::*;
 
 mod wm;
+mod kb;
+mod ffi;
+mod rect;
+mod layout;
 mod error;
-mod keyboard;
 
 use crate::error::Error;
+use crate::kb::keysym;
 
 /// https://www.x.org/releases/X11R7.7/doc/libxcb/tutorial/index.html#wm
 /// https://jichu4n.com/posts/how-x-window-managers-work-and-how-to-write-one-part-iii/
@@ -22,24 +25,20 @@ enum Commands {
     Execute(&'static str),
 }
 
-fn run(conn: &mut wm::WindowManager) -> Result<(), Error> {
+fn run(conn: &mut wm::WindowManager<Commands>) -> Result<(), Error> {
+    conn.bind(KeyButMask::MOD4, keysym::q, Commands::Exit);
+    conn.bind(KeyButMask::MOD4, keysym::d, Commands::Execute("rofi -show run"));
+    conn.bind(KeyButMask::MOD4, keysym::Return, Commands::Execute("sakura"));
 
-    let mut km = wm::KeyManager::new();
-    km.add(KeyButMask::MOD4, KEY_q, Commands::Exit);
-    km.add(KeyButMask::MOD4, KEY_d, Commands::Execute("rofi -show run"));
-    km.add(KeyButMask::MOD4, KEY_Return, Commands::Execute("sakura"));
+    conn.sync()?;
 
     loop {
         match conn.next()? {
-            Some(wm::Event::KeyPress(m, k)) => {
-                match km.get(m, k) {
-                    Some(Commands::Exit) => break,
-                    Some(Commands::Execute(s)) => conn.spawn(s)?,
-                    None => continue,
-                }
-            },
-            Some(wm::Event::Map(w)) => {
-                conn.map(w)?
+            wm::Event::UserEvent(Commands::Exit) => break,
+            wm::Event::UserEvent(Commands::Execute(s)) => conn.spawn(s)?,
+            wm::Event::Map(w) => {
+                conn.map(w);
+                conn.sync()?;
             },
             _ => continue,
         }

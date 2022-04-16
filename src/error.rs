@@ -6,10 +6,8 @@ pub enum Error {
     AlreadyRunning,
     #[error("screen not found")]
     MissingScreen,
-    #[error("XKB version unsupported")]
-    XKBUnsupported,
-    #[error("Unknown keyboard device")]
-    UnknownKeyboard,
+    #[error("failed to create key symbols")]
+    KeyboardError,
     #[error("failed to register signal handler")]
     SignalError(std::io::Error),
     #[error("failed to connect to X11 server")]

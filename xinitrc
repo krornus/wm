@@ -1,1 +1,1 @@
-exec cargo run > log
+exec cargo run 2>&1 > log
