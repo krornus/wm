@@ -26,11 +26,11 @@ enum Commands {
 }
 
 fn run(conn: &mut wm::WindowManager<Commands>) -> Result<(), Error> {
-    conn.bind(KeyButMask::MOD4, keysym::q, Commands::Exit);
-    conn.bind(KeyButMask::MOD4, keysym::d, Commands::Execute("rofi -show run"));
-    conn.bind(KeyButMask::MOD4, keysym::Return, Commands::Execute("sakura"));
-
-    conn.sync()?;
+    let mut binder = conn.binder()?;
+    binder.add(KeyButMask::MOD4, keysym::q, Commands::Exit);
+    binder.add(KeyButMask::MOD4, keysym::d, Commands::Execute("rofi -show run"));
+    binder.add(KeyButMask::MOD4, keysym::Return, Commands::Execute("sakura"));
+    binder.bind()?;
 
     loop {
         match conn.next()? {

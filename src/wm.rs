@@ -1,17 +1,16 @@
 use std::ptr;
 use std::sync::Arc;
 use std::process::Command;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::os::unix::prelude::{AsRawFd, RawFd};
 
 use fork::{Fork};
-use xcb::{self, x};
+use xcb::x;
 use signal_hook::consts::signal::*;
 
 use crate::rect::Rect;
 use crate::error::Error;
-use crate::kb::{KeySymbols, Keysym, Keycode, keysym};
+use crate::kb::{KeyBinder, KeyManager, Keycode};
 use crate::layout::{Layout, LeftMaster};
 
 pub struct Monitor {
@@ -33,14 +32,11 @@ impl Monitor {
 pub struct WindowManager<T> {
     root: x::Window,
     conn: xcb::Connection,
-    sym: KeySymbols,
     pending: Vec<xcb::VoidCookieChecked>,
     signal: Arc<AtomicUsize>,
     keymap: KeyManager<T>,
     layout: LeftMaster,
     monitors: Vec<Monitor>,
-    numlock: x::ModMask,
-    capslock: x::ModMask,
 }
 
 pub enum Event<T> {
@@ -55,7 +51,7 @@ impl<T: Copy> WindowManager<T> {
         let (conn, main) = xcb::Connection::connect(name)?;
 
         let setup = conn.get_setup();
-        let scr = setup
+        let screen = setup
             .roots()
             .nth(main as usize)
             .ok_or(Error::MissingScreen)?;
@@ -65,9 +61,7 @@ impl<T: Copy> WindowManager<T> {
             .map(|s| Monitor::new(s))
             .collect();
 
-        let root = scr.root();
-        let sym = KeySymbols::new(&conn)?;
-
+        let root = screen.root();
         let cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
@@ -83,24 +77,14 @@ impl<T: Copy> WindowManager<T> {
             conn: conn,
             root: root,
             signal: Arc::new(AtomicUsize::new(0)),
-            sym: sym,
             keymap: KeyManager::new(),
             pending: Vec::new(),
             monitors: monitors,
             layout: LeftMaster::new(),
-            numlock: x::ModMask::empty(),
-            capslock: x::ModMask::empty(),
         };
-
-        wm.numlock = wm.modmask(keysym::Num_Lock)?;
-        wm.capslock = wm.modmask(keysym::Caps_Lock)?;
-
-        println!("numlock: {:#x}", wm.numlock.bits());
-        println!("capslock: {:#x}", wm.capslock.bits());
 
         signal_hook::flag::register_usize(SIGCHLD, Arc::clone(&wm.signal), SIGCHLD as usize)
             .map_err(|e| Error::SignalError(e))?;
-
         signal_hook::flag::register_usize(SIGINT, Arc::clone(&wm.signal), SIGINT as usize)
             .map_err(|e| Error::SignalError(e))?;
 
@@ -125,8 +109,7 @@ impl<T: Copy> WindowManager<T> {
 
         match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                let keysym = self.sym.keysym(e.detail() as Keycode, 0);
-                let value = self.keymap.get(e.state(), keysym);
+                let value = self.keymap.get(e.state(), e.detail() as Keycode);
 
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
@@ -138,20 +121,6 @@ impl<T: Copy> WindowManager<T> {
                 Ok(Event::Empty)
             },
             _ => Ok(Event::Empty),
-        }
-    }
-
-    pub fn bind(&mut self, m: x::KeyButMask, k: Keysym, v: T) {
-        self.keymap.add(m, k, v);
-
-        let modifiers = x::ModMask::from_bits(m.bits())
-            .unwrap();
-
-        for keycode in self.sym.keycodes(k) {
-            self.grabkey(modifiers, keycode as u8);
-            self.grabkey(modifiers | self.numlock, keycode as u8);
-            self.grabkey(modifiers | self.capslock, keycode as u8);
-            self.grabkey(modifiers | self.numlock | self.capslock, keycode as u8);
         }
     }
 
@@ -169,6 +138,10 @@ impl<T: Copy> WindowManager<T> {
         }
 
         Ok(())
+    }
+
+    pub fn binder<'a>(&'a mut self) -> Result<KeyBinder<'a, T>, Error> {
+        KeyBinder::new(&self.conn, self.root)
     }
 
     pub fn map(&mut self, win: x::Window) {
@@ -243,64 +216,10 @@ impl<T> WindowManager<T> {
             }
         }
     }
-
-    fn grabkey(&mut self, modifiers: x::ModMask, keycode: u8) {
-        self.request(&x::GrabKey {
-            owner_events: true,
-            grab_window: self.root,
-            modifiers: modifiers,
-            key: keycode as u8,
-            pointer_mode: x::GrabMode::Async,
-            keyboard_mode: x::GrabMode::Async,
-        });
-    }
-
-    fn modmask(&mut self, keysym: Keysym) -> Result<x::ModMask, Error> {
-        let cookie = self.conn.send_request(&x::GetModifierMapping { });
-        let reply = self.conn.wait_for_reply(cookie)?;
-
-        for target in self.sym.keycodes(keysym) {
-            for (i, keycode) in reply.keycodes().iter().enumerate() {
-                if target == (*keycode as u32) {
-                    println!("foudn it");
-                    /* reply.keycodes really returns a 2 dimensional array,
-                     *   keycodes[8][keycodes_per_modifier]
-                     * by dividing the index by 8, we get the associated
-                     * modifier, shifting it gives us the mask. */
-                    let m = x::ModMask::from_bits(1 << (i / 8))
-                        .unwrap_or(x::ModMask::empty());
-
-                    return Ok(m);
-                }
-            }
-        }
-
-        Ok(x::ModMask::empty())
-    }
 }
 
 impl<T> AsRawFd for WindowManager<T> {
     fn as_raw_fd(&self) -> RawFd {
         self.conn.as_raw_fd()
-    }
-}
-
-pub struct KeyManager<T> {
-    map: HashMap<(x::KeyButMask, Keysym), T>,
-}
-
-impl<T: Copy> KeyManager<T> {
-    pub fn new() -> Self {
-        KeyManager {
-            map: HashMap::new(),
-        }
-    }
-
-    pub fn add(&mut self, m: x::KeyButMask, k: Keysym, v: T) {
-        self.map.insert((m, k), v);
-    }
-
-    pub fn get(&self, m: x::KeyButMask, k: Keysym) -> Option<T> {
-        self.map.get(&(m, k)).copied()
     }
 }
