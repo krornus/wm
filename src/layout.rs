@@ -5,16 +5,15 @@ pub trait Layout {
     fn arrange_one(&mut self, scope: &Rect, count: usize, index: usize) -> Rect;
 
     fn arrange_all(&mut self, scope: &Rect, count: usize) -> Vec<Rect> {
-        (0..count).map(|i| self.arrange_one(scope, count, i))
-                  .collect()
+        (0..count)
+            .map(|i| self.arrange_one(scope, count, i))
+            .collect()
     }
 
     fn arrange(&mut self, scope: &Rect) -> Rect {
         let n = self.count();
         self.arrange_one(scope, n + 1, n)
     }
-
-
 }
 
 pub struct LeftMaster {
@@ -44,8 +43,6 @@ impl Layout for LeftMaster {
 
 impl LeftMaster {
     pub fn new() -> Self {
-        LeftMaster {
-            count: 0
-        }
+        LeftMaster { count: 0 }
     }
 }

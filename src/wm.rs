@@ -1,17 +1,17 @@
-use std::ptr;
-use std::sync::Arc;
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::os::unix::prelude::{AsRawFd, RawFd};
+use std::process::Command;
+use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use fork::{Fork};
-use xcb::x;
+use fork::Fork;
 use signal_hook::consts::signal::*;
+use xcb::x::{self, Keysym, Keycode};
 
-use crate::rect::Rect;
 use crate::error::Error;
-use crate::kb::{KeyBinder, KeyManager, Keycode};
+use crate::kb::KeyManager;
 use crate::layout::{Layout, LeftMaster};
+use crate::rect::Rect;
 
 pub struct Monitor {
     area: Rect,
@@ -21,10 +21,11 @@ impl Monitor {
     fn new(screen: &x::Screen) -> Self {
         Monitor {
             area: Rect::new(
-                0, 0,
+                0,
+                0,
                 screen.width_in_pixels() as usize,
                 screen.height_in_pixels() as usize,
-            )
+            ),
         }
     }
 }
@@ -34,7 +35,7 @@ pub struct WindowManager<T> {
     conn: xcb::Connection,
     pending: Vec<xcb::VoidCookieChecked>,
     signal: Arc<AtomicUsize>,
-    keymap: KeyManager<T>,
+    keys: KeyManager<T>,
     layout: LeftMaster,
     monitors: Vec<Monitor>,
 }
@@ -46,7 +47,7 @@ pub enum Event<T> {
     Map(x::Window),
 }
 
-impl<T: Copy> WindowManager<T> {
+impl<T: Copy + std::fmt::Debug> WindowManager<T> {
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
         let (conn, main) = xcb::Connection::connect(name)?;
 
@@ -56,28 +57,27 @@ impl<T: Copy> WindowManager<T> {
             .nth(main as usize)
             .ok_or(Error::MissingScreen)?;
 
-        let monitors = setup
-            .roots()
-            .map(|s| Monitor::new(s))
-            .collect();
+        let monitors = setup.roots().map(|s| Monitor::new(s)).collect();
 
         let root = screen.root();
         let cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
-                x::EventMask::SUBSTRUCTURE_REDIRECT |
-                x::EventMask::KEY_PRESS,
+                x::EventMask::SUBSTRUCTURE_REDIRECT,
             )],
         });
 
         conn.check_request(cookie)
             .map_err(|_| Error::AlreadyRunning)?;
 
-        let mut wm = WindowManager {
+        let keys = KeyManager::new(&conn)?;
+        dbg!(0);
+
+        let wm = WindowManager {
             conn: conn,
             root: root,
             signal: Arc::new(AtomicUsize::new(0)),
-            keymap: KeyManager::new(),
+            keys: keys,
             pending: Vec::new(),
             monitors: monitors,
             layout: LeftMaster::new(),
@@ -88,7 +88,9 @@ impl<T: Copy> WindowManager<T> {
         signal_hook::flag::register_usize(SIGINT, Arc::clone(&wm.signal), SIGINT as usize)
             .map_err(|e| Error::SignalError(e))?;
 
+        dbg!(1);
         Self::reap()?;
+        dbg!(2);
 
         Ok(wm)
     }
@@ -99,27 +101,28 @@ impl<T: Copy> WindowManager<T> {
         let event = self.conn.wait_for_event()?;
 
         const SIGCHLD_U: usize = SIGCHLD as usize;
-        const SIGINT_U:  usize = SIGINT as usize;
+        const SIGINT_U: usize = SIGINT as usize;
 
         match self.signal.load(Ordering::Relaxed) {
-            SIGCHLD_U => { Self::reap()?; },
-            SIGINT_U => { return Ok(Event::Interrupt); },
-            _ => { },
+            SIGCHLD_U => {
+                Self::reap()?;
+            }
+            SIGINT_U => {
+                return Ok(Event::Interrupt);
+            }
+            _ => {}
         }
 
         match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                let value = self.keymap.get(e.state(), e.detail() as Keycode);
-
+                let value = self.keys.get(e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
-            },
-            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => {
-                Ok(Event::Map(e.window()))
-            },
+            }
+            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => Ok(Event::Map(e.window())),
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
                 self.configure(e);
                 Ok(Event::Empty)
-            },
+            }
             _ => Ok(Event::Empty),
         }
     }
@@ -127,8 +130,7 @@ impl<T: Copy> WindowManager<T> {
     pub fn spawn(&self, cmd: &str) -> Result<(), Error> {
         if let Some(args) = shlex::split(cmd) {
             if let Ok(Fork::Child) = fork::fork() {
-                fork::setsid()
-                    .expect("setsid failed");
+                fork::setsid().expect("setsid failed");
 
                 Command::new(&args[0])
                     .args(&args[1..])
@@ -140,21 +142,17 @@ impl<T: Copy> WindowManager<T> {
         Ok(())
     }
 
-    pub fn binder<'a>(&'a mut self) -> Result<KeyBinder<'a, T>, Error> {
-        KeyBinder::new(&self.conn, self.root)
+    pub fn bind(&mut self, m: x::KeyButMask, k: Keysym, v: T) -> Result<(), Error> {
+        self.keys.bind(&self.conn, self.root, m, k, v)
     }
 
     pub fn map(&mut self, win: x::Window) {
         self.request(&x::ChangeWindowAttributes {
             window: win,
-            value_list: &[xcb::x::Cw::EventMask(
-                x::EventMask::SUBSTRUCTURE_REDIRECT
-            )],
+            value_list: &[xcb::x::Cw::EventMask(x::EventMask::SUBSTRUCTURE_REDIRECT)],
         });
 
-        self.request(&x::MapWindow {
-            window: win,
-        });
+        self.request(&x::MapWindow { window: win });
     }
 
     pub fn sync(&mut self) -> Result<(), Error> {
@@ -194,12 +192,8 @@ impl<T> WindowManager<T> {
         let mut zombie = false;
 
         loop {
-            let rv = unsafe {
-                libc::waitpid(
-                    -1,
-                    ptr::null::<*const i32>() as *mut i32,
-                    libc::WNOHANG)
-            };
+            let rv =
+                unsafe { libc::waitpid(-1, ptr::null::<*const i32>() as *mut i32, libc::WNOHANG) };
 
             if rv < 0 {
                 let e = std::io::Error::last_os_error();

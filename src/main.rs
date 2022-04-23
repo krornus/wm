@@ -1,12 +1,11 @@
 use clap::Parser;
 use xcb::x::KeyButMask;
 
-mod wm;
-mod kb;
-mod ffi;
-mod rect;
-mod layout;
 mod error;
+mod kb;
+mod layout;
+mod rect;
+mod wm;
 
 use crate::error::Error;
 use crate::kb::keysym;
@@ -19,18 +18,30 @@ use crate::kb::keysym;
 #[clap(author, version, about, long_about = None)]
 struct Args {}
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Commands {
     Exit,
     Execute(&'static str),
 }
 
 fn run(conn: &mut wm::WindowManager<Commands>) -> Result<(), Error> {
-    let mut binder = conn.binder()?;
-    binder.add(KeyButMask::MOD4, keysym::q, Commands::Exit);
-    binder.add(KeyButMask::MOD4, keysym::d, Commands::Execute("rofi -show run"));
-    binder.add(KeyButMask::MOD4, keysym::Return, Commands::Execute("sakura"));
-    binder.bind()?;
+    conn.bind(
+        KeyButMask::MOD4,
+        keysym::q,
+        Commands::Exit
+    )?;
+
+    conn.bind(
+        KeyButMask::MOD4,
+        keysym::d,
+        Commands::Execute("rofi -show run"),
+    )?;
+
+    conn.bind(
+        KeyButMask::MOD4,
+        keysym::Return,
+        Commands::Execute("sakura"),
+    )?;
 
     loop {
         match conn.next()? {
@@ -39,7 +50,7 @@ fn run(conn: &mut wm::WindowManager<Commands>) -> Result<(), Error> {
             wm::Event::Map(w) => {
                 conn.map(w);
                 conn.sync()?;
-            },
+            }
             _ => continue,
         }
     }
@@ -52,6 +63,5 @@ fn main() {
     let mut conn = wm::WindowManager::connect(None)
         .expect("failed to connect to X11 server");
 
-    run(&mut conn)
-        .expect("window manager error");
+    run(&mut conn).expect("window manager error");
 }

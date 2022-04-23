@@ -1,204 +1,201 @@
 use std::collections::HashMap;
 
 use crate::error::Error;
-use crate::ffi::keyboard::*;
 
-use xcb::x;
+use xcb::x::{self, Keysym, Keycode};
 
 pub mod keysym;
 
-pub type Keycode = xcb_keycode_t;
-pub type Keysym = xcb_keysym_t;
-
-pub struct KeySymbols<'a> {
-    conn: &'a xcb::Connection,
-    raw: *mut xcb_key_symbols_t,
+pub struct KeyMap {
+    min: u32,
+    max: u32,
+    keymap: x::GetKeyboardMappingReply,
+    modmap: x::GetModifierMappingReply,
 }
 
-pub struct KeycodeIterator {
+pub struct KeycodeIterator<'a> {
+    min: usize,
+    per: usize,
     index: usize,
-    keycodes: *mut xcb_keycode_t,
+    target: Keysym,
+    keysyms: &'a [Keysym],
 }
 
-impl Drop for KeycodeIterator {
-    fn drop(&mut self) {
-        unsafe {
-            libc::free(self.keycodes as *mut libc::c_void);
-        }
-    }
-}
-
-impl Iterator for KeycodeIterator {
+impl<'a> Iterator for KeycodeIterator<'a> {
     type Item = Keycode;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.keycodes.is_null() {
-            return None;
+        while self.index < self.keysyms.len() {
+            let i = self.index;
+
+            /* next keysym in keycode */
+            self.index += 1;
+
+            if &self.keysyms[i] == &self.target {
+                /* seek to next keycode */
+                self.index = match self.index % self.per {
+                    0 => self.index,
+                    r => self.index + (self.per - r)
+                };
+
+                /* return keycode */
+                return Some(((i / self.per) + self.min) as Keycode);
+            }
         }
 
-        let keycode = unsafe {
-            self.keycodes.add(self.index)
-                .as_ref()
-                .unwrap()
-        };
-
-        if keycode != &x::NO_SYMBOL {
-            self.index = self.index + 1;
-            Some(*keycode)
-        } else {
-            None
-        }
+        None
     }
 }
 
-impl<'a> KeySymbols<'a> {
-    pub fn new(conn: &'a xcb::Connection) -> Result<Self, Error> {
-        let ptr = conn.get_raw_conn();
-        let raw = unsafe {
-            xcb_key_symbols_alloc(ptr)
-        };
+impl KeyMap {
+    pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
+        let setup = conn.get_setup();
+        let min = setup.min_keycode();
+        let max = setup.max_keycode();
 
-        if raw.is_null() {
-            Err(Error::KeyboardError)
+        let key_cookie = conn.send_request(&x::GetKeyboardMapping {
+            first_keycode: min,
+            count: max - min + 1,
+        });
+
+        let mod_cookie = conn.send_request(&x::GetModifierMapping {});
+
+        let keymap = conn.wait_for_reply(key_cookie)?;
+        let modmap = conn.wait_for_reply(mod_cookie)?;
+
+        Ok(KeyMap {
+            min: min.into(),
+            max: max.into(),
+            keymap: keymap,
+            modmap: modmap,
+        })
+    }
+
+    pub fn keysyms(&self, keycode: Keycode) -> &[Keysym] {
+        if (keycode as u32) < self.min || (keycode as u32) > self.max {
+            &[]
         } else {
-            Ok(KeySymbols {
-                conn: conn,
-                raw: raw,
-            })
+            let per = self.keymap.keysyms_per_keycode() as u32;
+            let keysyms = self.keymap.keysyms();
+
+            let start = (keycode as u32 - self.min) * per;
+            let stop = start + per;
+
+            &keysyms[start as usize..stop as usize]
         }
     }
 
-    pub fn keycodes(&mut self, keysym: Keysym) -> KeycodeIterator {
-        let keycodes = unsafe {
-            xcb_key_symbols_get_keycode(self.raw, keysym)
-        };
+    pub fn keycodes(&self, keysym: Keysym) -> KeycodeIterator {
+        let per = self.keymap.keysyms_per_keycode() as usize;
+        let keysyms = self.keymap.keysyms();
 
         KeycodeIterator {
+            min: self.min as usize,
+            per: per,
             index: 0,
-            keycodes: keycodes,
+            target: keysym,
+            keysyms: keysyms,
         }
     }
 
-    pub fn mask(&mut self, keysym: Keysym) -> Result<x::ModMask, Error> {
-        let cookie = self.conn.send_request(&x::GetModifierMapping { });
-        let reply = self.conn.wait_for_reply(cookie)?;
-
+    pub fn mask(&mut self, keysym: Keysym) -> Result<x::KeyButMask, Error> {
         for target in self.keycodes(keysym) {
-            for (i, keycode) in reply.keycodes().iter().enumerate() {
-                if target == (*keycode as u32) {
+            for (i, keycode) in self.modmap.keycodes().iter().enumerate() {
+                if target == *keycode {
                     /* reply.keycodes really returns a 2 dimensional array,
                      *   keycodes[8][keycodes_per_modifier]
                      * by dividing the index by 8, we get the associated
                      * modifier, shifting it gives us the mask. */
-                    let m = x::ModMask::from_bits(1 << (i / 8))
-                        .unwrap_or(x::ModMask::empty());
+                    let m =
+                        x::KeyButMask::from_bits(1 << (i / 8)).unwrap_or(x::KeyButMask::empty());
 
                     return Ok(m);
                 }
             }
         }
 
-        Ok(x::ModMask::empty())
+        Ok(x::KeyButMask::empty())
     }
 }
 
-impl<'a> Drop for KeySymbols<'a> {
-    fn drop(&mut self) {
-        unsafe {
-            xcb_key_symbols_free(self.raw);
-        }
-    }
+pub struct KeyManager<T> {
+    keymap: KeyMap,
+    num_lock: x::KeyButMask,
+    caps_lock: x::KeyButMask,
+    scroll_lock: x::KeyButMask,
+    bindings: HashMap<(x::KeyButMask, Keycode), T>,
 }
 
-pub struct KeyBinder<'a, T> {
-    conn: &'a xcb::Connection,
-    root: x::Window,
-    sym: KeySymbols<'a>,
-    map: Vec<(x::ModMask, Keycode, T)>,
-}
+impl<T: Copy> KeyManager<T> {
+    /* TODO: support refreshing mappings */
+    pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
+        let mut keymap = KeyMap::new(conn)?;
 
-impl<'a, T: Copy> KeyBinder<'a, T> {
-    pub fn new(conn: &'a xcb::Connection, root: x::Window) -> Result<Self, Error> {
-        let sym = KeySymbols::new(conn)?;
-        let map = Vec::new();
+        let num_lock = keymap.mask(keysym::Num_Lock)?;
+        let caps_lock = keymap.mask(keysym::Caps_Lock)?;
+        let scroll_lock = keymap.mask(keysym::Scroll_Lock)?;
 
-        Ok(Self { conn, root, sym, map })
-    }
-
-    pub fn add(&mut self, m: x::KeyButMask, k: Keysym, v: T) {
-        let modifiers = x::ModMask::from_bits(m.bits())
-            .unwrap();
-
-        for keycode in self.sym.keycodes(k) {
-            self.map.push((modifiers, keycode, v));
-        }
+        Ok(KeyManager {
+            keymap: keymap,
+            num_lock: num_lock,
+            caps_lock: caps_lock,
+            scroll_lock: scroll_lock,
+            bindings: HashMap::new(),
+        })
     }
 
     #[inline]
-    fn grab(&self, modifiers: x::ModMask, keycode: u8) -> xcb::VoidCookieChecked {
-        self.conn.send_request_checked(&x::GrabKey {
+    fn grab(&self, conn: &xcb::Connection, root: x::Window, modifiers: x::KeyButMask, keycode: Keycode) -> xcb::VoidCookieChecked {
+        let m = x::ModMask::from_bits(modifiers.bits()).unwrap();
+
+        conn.send_request_checked(&x::GrabKey {
             owner_events: true,
-            grab_window: self.root,
-            modifiers: modifiers,
+            grab_window: root,
+            modifiers: m,
             key: keycode as u8,
             pointer_mode: x::GrabMode::Async,
             keyboard_mode: x::GrabMode::Async,
         })
     }
 
-    pub fn bind(mut self) -> Result<KeyManager<T>, Error> {
-        let mut cookies = Vec::with_capacity(self.map.len() * 4 + 1);
+    pub fn bind(
+        &mut self,
+        conn: &xcb::Connection,
+        root: x::Window,
+        m: x::KeyButMask,
+        k: Keysym,
+        v: T,
+    ) -> Result<(), Error> {
+        let mut cookies = Vec::with_capacity(8);
 
-        let numlock = self.sym.mask(keysym::Num_Lock)?;
-        let capslock = self.sym.mask(keysym::Caps_Lock)?;
-
-        let mut mgr = KeyManager::new();
-        let map = std::mem::replace(&mut self.map, vec![]);
-
-        let cookie = self.conn.send_request_checked(&x::UngrabKey {
-            key: x::GRAB_ANY,
-            grab_window: self.root,
-            modifiers: x::ModMask::ANY,
-        });
-
-        cookies.push(cookie);
-
-        for (m, k, v) in map {
-            cookies.push(self.grab(m, k as u8));
-            cookies.push(self.grab(m | numlock, k as u8));
-            cookies.push(self.grab(m | capslock, k as u8));
-            cookies.push(self.grab(m | numlock | capslock, k as u8));
-
-            mgr.add(m, k, v);
+        for kc in self.keymap.keycodes(k) {
+            self.bindings.insert((m, kc), v);
+            cookies.push(self.grab(
+                conn, root, m, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.num_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.caps_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.scroll_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.caps_lock   | self.num_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.scroll_lock | self.num_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.scroll_lock | self.caps_lock, kc));
+            cookies.push(self.grab(
+                conn, root, m | self.num_lock    | self.scroll_lock | self.caps_lock, kc));
         }
 
         for cookie in cookies {
-            self.conn.check_request(cookie)?;
+            conn.check_request(cookie)?;
         }
 
-        Ok(mgr)
-    }
-}
-
-pub struct KeyManager<T> {
-    map: HashMap<(x::ModMask, Keycode), T>,
-}
-
-impl<T: Copy> KeyManager<T> {
-    pub fn new() -> Self {
-        KeyManager {
-            map: HashMap::new(),
-        }
-    }
-
-    pub fn add(&mut self, m: x::ModMask, k: Keycode, v: T) {
-        self.map.insert((m, k), v);
+        Ok(())
     }
 
     pub fn get(&self, m: x::KeyButMask, k: Keycode) -> Option<T> {
-        let modifiers = x::ModMask::from_bits(m.bits())
-            .unwrap();
-
-        self.map.get(&(modifiers, k)).copied()
+        self.bindings.get(&(m, k)).copied()
     }
 }

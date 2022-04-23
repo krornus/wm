@@ -2,6 +2,11 @@
 VERBOSE=false
 FOLLOW=false
 
+pkill -x Xephyr -9
+if [ $? -eq 0 ]; then
+    exit 0
+fi
+
 while getopts "vf" options; do
     case "${options}" in
         v) VERBOSE=true;;
@@ -15,7 +20,7 @@ if [ $FOLLOW = true ]; then
 fi
 
 if [ $VERBOSE = true ]; then
-    startx ./xinitrc -- /usr/bin/Xephyr :1 -resizeable
+    echo "exec cargo run" | startx /dev/stdin -- /usr/bin/Xephyr :1 -resizeable
 else
     nohup startx ./xinitrc -- /usr/bin/Xephyr :1 -resizeable > /dev/null &
 fi
