@@ -1,11 +1,130 @@
 use std::os::unix::prelude::{AsRawFd, RawFd};
-use std::process::Command;
 
 use fork::Fork;
 use xcb::x::{self, Keysym, Keycode};
 
 use crate::error::Error;
 use crate::kb::KeyManager;
+
+pub struct Rect {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+impl Rect {
+    pub fn new(x: usize, y: usize, w: usize, h: usize) -> Self {
+        Rect { x, y, w, h }
+    }
+
+    pub fn center_x(&self) -> usize {
+        self.x + (self.w / 2)
+    }
+}
+
+pub trait Layout {
+    fn arrange(&mut self, scope: &Rect, count: usize, index: usize) -> Rect;
+}
+
+pub struct LeftMaster {
+}
+
+impl Layout for LeftMaster {
+
+    fn arrange(&mut self, scope: &Rect, count: usize, index: usize) -> Rect {
+        if index == 0 {
+            if count == 1 {
+                Rect::new(0, 0, scope.w, scope.h)
+            } else {
+                Rect::new(0, 0, scope.center_x(), scope.h)
+            }
+        } else {
+            /* height of one box */
+            let boxh = scope.h / (count - 1);
+            /* pos of one box */
+            let posh = boxh * (index - 1);
+
+            Rect::new(scope.center_x(), posh, scope.w, posh + boxh)
+        }
+    }
+}
+
+pub struct Client {
+    scope: Rect,
+    window: x::Window,
+}
+
+impl Client {
+    fn new(window: x::Window) -> Self {
+        Client {
+            scope: Rect::new(0, 0, 1, 1),
+            window: window,
+        }
+    }
+
+    fn resize(&mut self, adapter: &mut Adapter, scope: Rect) -> xcb::VoidCookieChecked {
+        self.scope = scope;
+
+        adapter.conn.send_request_checked(&x::ConfigureWindow {
+            window: self.window,
+            value_list: &[
+                x::ConfigWindow::X(self.scope.x as i32),
+                x::ConfigWindow::Y(self.scope.y as i32),
+                x::ConfigWindow::Width(self.scope.w as u32),
+                x::ConfigWindow::Height(self.scope.h as u32),
+            ],
+        })
+    }
+}
+
+pub struct Monitor {
+    scope: Rect,
+    root: x::Window,
+    clients: Vec<Client>,
+    layout: Box<dyn Layout>,
+}
+
+impl Monitor {
+    fn new<T: 'static + Layout>(scr: &x::Screen, layout: T) -> Self {
+        let scope = Rect::new(
+            0, 0,
+            scr.width_in_pixels() as usize,
+            scr.height_in_pixels() as usize,
+        );
+
+        Monitor {
+            scope: scope,
+            root: scr.root(),
+            clients: vec![],
+            layout: Box::new(layout),
+        }
+    }
+
+    fn client(&self, window: x::Window) -> Option<&Client> {
+        self.clients.iter().find(|x| x.window == window)
+    }
+
+    fn client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
+        self.clients.iter_mut().find(|x| x.window == window)
+    }
+
+    fn arrange(&mut self, adapter: &mut Adapter) -> Result<(), Error> {
+        let count = self.clients.len();
+        let mut cookies = Vec::with_capacity(count);
+
+        for (i, client) in self.clients.iter_mut().enumerate() {
+            let scope = self.layout.arrange(&self.scope, count, i);
+            cookies.push(client.resize(adapter, scope));
+        }
+
+        for c in cookies {
+            adapter.conn.check_request(c)?;
+        }
+
+        Ok(())
+    }
+}
 
 pub struct Adapter {
     pub root: x::Window,
@@ -24,6 +143,8 @@ impl Adapter {
 pub struct WindowManager<T: Copy> {
     adapter: Adapter,
     keys: KeyManager<T>,
+    selmon: usize,
+    monitors: Vec<Monitor>,
 }
 
 pub enum Event<T> {
@@ -42,7 +163,7 @@ impl<T: Copy> WindowManager<T> {
             .ok_or(Error::MissingScreen)?;
 
         let root = screen.root();
-        let cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
+        conn.send_and_check_request(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
                 x::EventMask::STRUCTURE_NOTIFY |
@@ -50,16 +171,18 @@ impl<T: Copy> WindowManager<T> {
                 x::EventMask::SUBSTRUCTURE_NOTIFY |
                 x::EventMask::SUBSTRUCTURE_REDIRECT
             )],
-        });
-
-        conn.check_request(cookie).map_err(|_| Error::AlreadyRunning)?;
+        }).map_err(|_| Error::AlreadyRunning)?;
 
         let keys = KeyManager::new(&conn)?;
-        let adapter = Adapter::new(conn, root);
+        let monitors = setup.roots().map(|x| {
+            Monitor::new(x, LeftMaster {})
+        }).collect();
 
         let wm = WindowManager {
             keys: keys,
-            adapter: adapter,
+            selmon: 0,
+            monitors: monitors,
+            adapter: Adapter::new(conn, root),
         };
 
         Ok(wm)
@@ -90,10 +213,13 @@ impl<T: Copy> WindowManager<T> {
     }
 
     pub fn spawn(&self, cmd: &str) {
+        /* xcb opens its descriptors with CLOEXEC */
         if let Some(args) = shlex::split(cmd) {
             if let Ok(Fork::Child) = fork::fork() {
                 fork::setsid().expect("setsid failed");
 
+                /* swap to const pointers. into_raw() can leak here
+                 * because we will execvp() or unreachable!() */
                 let cs: Vec<_> = args.into_iter().map(|x| {
                     std::ffi::CString::new(x)
                         .expect("spawn: invalid arguments")
@@ -103,6 +229,7 @@ impl<T: Copy> WindowManager<T> {
                 unsafe {
                     libc::execvp(cs[0], (&cs[..]).as_ptr() as *const *const i8);
                 }
+
                 unreachable!();
             }
         }
@@ -146,25 +273,33 @@ impl<T: Copy> WindowManager<T> {
             values.push(x::ConfigWindow::StackMode(event.stack_mode()));
         }
 
-        let cfg = x::ConfigureWindow {
+        self.adapter.conn.send_and_check_request(&x::ConfigureWindow {
             window: event.window(),
             value_list: values.as_slice(),
-        };
-
-        let cookie = self.adapter.conn.send_request_checked(&cfg);
-        self.adapter.conn.check_request(cookie)?;
+        })?;
 
         Ok(())
     }
 
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<(), Error> {
-        let cookie = self.adapter.conn.send_request_checked(&x::MapWindow {
-            window: e.window()
-        });
+        self.monitors[self.selmon].clients.push(Client::new(e.window()));
+        self.monitors[self.selmon].arrange(&mut self.adapter)?;
 
-        self.adapter.conn.check_request(cookie)?;
+        self.adapter.conn.send_and_check_request(&x::MapWindow {
+            window: e.window()
+        })?;
 
         Ok(())
+    }
+
+    fn client(&self, window: x::Window) -> Option<&Client> {
+        self.monitors.iter()
+            .find_map(|x| x.client(window))
+    }
+
+    fn client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
+        self.monitors.iter_mut()
+            .find_map(|x| x.client_mut(window))
     }
 }
 
