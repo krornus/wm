@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::Error;
+use crate::wm::Adapter;
 
 use xcb::x::{self, Keysym, Keycode};
 
@@ -8,7 +9,6 @@ pub mod keysym;
 
 pub struct KeyMap {
     min: u32,
-    max: u32,
     keymap: x::GetKeyboardMappingReply,
     modmap: x::GetModifierMappingReply,
 }
@@ -58,31 +58,17 @@ impl KeyMap {
             count: max - min + 1,
         });
 
-        let mod_cookie = conn.send_request(&x::GetModifierMapping {});
+        let mod_cookie = conn.send_request(&x::GetModifierMapping {
+        });
 
         let keymap = conn.wait_for_reply(key_cookie)?;
         let modmap = conn.wait_for_reply(mod_cookie)?;
 
         Ok(KeyMap {
             min: min.into(),
-            max: max.into(),
             keymap: keymap,
             modmap: modmap,
         })
-    }
-
-    pub fn keysyms(&self, keycode: Keycode) -> &[Keysym] {
-        if (keycode as u32) < self.min || (keycode as u32) > self.max {
-            &[]
-        } else {
-            let per = self.keymap.keysyms_per_keycode() as u32;
-            let keysyms = self.keymap.keysyms();
-
-            let start = (keycode as u32 - self.min) * per;
-            let stop = start + per;
-
-            &keysyms[start as usize..stop as usize]
-        }
     }
 
     pub fn keycodes(&self, keysym: Keysym) -> KeycodeIterator {
@@ -145,10 +131,17 @@ impl<T: Copy> KeyManager<T> {
     }
 
     #[inline]
-    fn grab(&self, conn: &xcb::Connection, root: x::Window, modifiers: x::KeyButMask, keycode: Keycode) -> xcb::VoidCookieChecked {
+    fn grab(&self,
+        adapter: &mut Adapter,
+        modifiers: x::KeyButMask,
+        keycode: Keycode) -> xcb::VoidCookieChecked
+    {
         let m = x::ModMask::from_bits(modifiers.bits()).unwrap();
+        let root = adapter.root;
 
-        conn.send_request_checked(&x::GrabKey {
+        println!("grab: [{:?} + {:?}]", modifiers, keycode);
+
+        adapter.conn.send_request_checked(&x::GrabKey {
             owner_events: true,
             grab_window: root,
             modifiers: m,
@@ -160,8 +153,7 @@ impl<T: Copy> KeyManager<T> {
 
     pub fn bind(
         &mut self,
-        conn: &xcb::Connection,
-        root: x::Window,
+        adapter: &mut Adapter,
         m: x::KeyButMask,
         k: Keysym,
         v: T,
@@ -170,32 +162,38 @@ impl<T: Copy> KeyManager<T> {
 
         for kc in self.keymap.keycodes(k) {
             self.bindings.insert((m, kc), v);
-            cookies.push(self.grab(
-                conn, root, m, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.num_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.caps_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.scroll_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.caps_lock   | self.num_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.scroll_lock | self.num_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.scroll_lock | self.caps_lock, kc));
-            cookies.push(self.grab(
-                conn, root, m | self.num_lock    | self.scroll_lock | self.caps_lock, kc));
+
+            let c = self.grab(adapter, m, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.num_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.caps_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.scroll_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.caps_lock | self.num_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.scroll_lock | self.num_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.scroll_lock | self.caps_lock, kc);
+            cookies.push(c);
+            let c = self.grab(adapter, m | self.num_lock | self.scroll_lock | self.caps_lock, kc);
+            cookies.push(c);
         }
 
+        println!("{:?}", cookies);
+
         for cookie in cookies {
-            conn.check_request(cookie)?;
+            adapter.conn.check_request(cookie)?;
         }
 
         Ok(())
     }
 
-    pub fn get(&self, m: x::KeyButMask, k: Keycode) -> Option<T> {
+    pub fn get(&self, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
+        println!("get: [{:?} + {:?}]", m, k);
+        m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
+        println!("  -> [{:?} + {:?}]", m, k);
         self.bindings.get(&(m, k)).copied()
     }
 }

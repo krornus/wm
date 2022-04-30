@@ -1,17 +1,12 @@
 use clap::Parser;
 use xcb::x::KeyButMask;
 
-mod error;
 mod kb;
-mod layout;
-mod rect;
 mod wm;
+mod error;
 
 use crate::error::Error;
 use crate::kb::keysym;
-
-/// https://www.x.org/releases/X11R7.7/doc/libxcb/tutorial/index.html#wm
-/// https://jichu4n.com/posts/how-x-window-managers-work-and-how-to-write-one-part-iii/
 
 /// Rust window manager
 #[derive(Parser, Debug)]
@@ -25,32 +20,16 @@ enum Commands {
 }
 
 fn run(conn: &mut wm::WindowManager<Commands>) -> Result<(), Error> {
-    conn.bind(
-        KeyButMask::MOD4,
-        keysym::q,
-        Commands::Exit
-    )?;
-
-    conn.bind(
-        KeyButMask::MOD4,
-        keysym::d,
-        Commands::Execute("rofi -show run"),
-    )?;
-
-    conn.bind(
-        KeyButMask::MOD4,
-        keysym::Return,
-        Commands::Execute("sakura"),
-    )?;
+    conn.bind(KeyButMask::MOD4, keysym::q, Commands::Exit)?;
+    conn.bind(KeyButMask::MOD4, keysym::d, Commands::Execute("rofi -show run"))?;
+    conn.bind(KeyButMask::MOD4, keysym::Return, Commands::Execute("xterm"))?;
 
     loop {
         match conn.next()? {
             wm::Event::UserEvent(Commands::Exit) => break,
-            wm::Event::UserEvent(Commands::Execute(s)) => conn.spawn(s)?,
-            wm::Event::Map(w) => {
-                conn.map(w);
-                conn.sync()?;
-            }
+            wm::Event::UserEvent(Commands::Execute(s)) => {
+                conn.spawn(s);
+            },
             _ => continue,
         }
     }

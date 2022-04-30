@@ -2,7 +2,7 @@
 VERBOSE=false
 FOLLOW=false
 
-pkill -x Xephyr -9
+pkill -x Xephyr -15
 if [ $? -eq 0 ]; then
     exit 0
 fi

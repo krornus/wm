@@ -1,55 +1,56 @@
 use std::os::unix::prelude::{AsRawFd, RawFd};
 use std::process::Command;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use fork::Fork;
-use signal_hook::consts::signal::*;
 use xcb::x::{self, Keysym, Keycode};
 
 use crate::error::Error;
 use crate::kb::KeyManager;
-use crate::layout::{Layout, LeftMaster};
-use crate::rect::Rect;
 
-pub struct Monitor {
-    area: Rect,
+pub struct Adapter {
+    pub root: x::Window,
+    pub conn: xcb::Connection,
 }
 
-impl Monitor {
-    fn new(screen: &x::Screen) -> Self {
-        Monitor {
-            area: Rect::new(
-                0,
-                0,
-                screen.width_in_pixels() as usize,
-                screen.height_in_pixels() as usize,
-            ),
+impl Adapter {
+    pub fn new(conn: xcb::Connection, root: x::Window) -> Self {
+        Adapter {
+            root: root,
+            conn: conn,
         }
     }
 }
 
-pub struct WindowManager<T> {
-    root: x::Window,
-    conn: xcb::Connection,
-    pending: Vec<xcb::VoidCookieChecked>,
-    signal: Arc<AtomicUsize>,
+pub struct WindowManager<T: Copy> {
+    adapter: Adapter,
     keys: KeyManager<T>,
-    layout: LeftMaster,
-    monitors: Vec<Monitor>,
 }
 
 pub enum Event<T> {
     Empty,
-    Interrupt,
     UserEvent(T),
-    Map(x::Window),
 }
 
-impl<T: Copy + std::fmt::Debug> WindowManager<T> {
+extern "C" {
+    #[link(xcb)]
+    fn xcb_disconnect(c: *mut xcb::ffi::xcb_connection_t);
+}
+
+fn connect(name: Option<&str>) -> Result<(xcb::Connection, i32), Error> {
+    let (conn, main) = xcb::Connection::connect(name)?;
+    let fd = conn.as_raw_fd();
+
+    unsafe {
+        let mut fl = libc::fcntl(fd, libc::F_GETFD);
+        libc::fcntl(fd, libc::F_SETFD, fl | libc::FD_CLOEXEC);
+    }
+
+    Ok((conn, main))
+}
+
+impl<T: Copy> WindowManager<T> {
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
-        let (conn, main) = xcb::Connection::connect(name)?;
+        let (conn, main) = connect(name)?;
 
         let setup = conn.get_setup();
         let screen = setup
@@ -57,79 +58,61 @@ impl<T: Copy + std::fmt::Debug> WindowManager<T> {
             .nth(main as usize)
             .ok_or(Error::MissingScreen)?;
 
-        let monitors = setup.roots().map(|s| Monitor::new(s)).collect();
-
         let root = screen.root();
         let cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
-                x::EventMask::SUBSTRUCTURE_REDIRECT,
+                // x::EventMask::STRUCTURE_NOTIFY |
+                x::EventMask::PROPERTY_CHANGE |
+                // x::EventMask::SUBSTRUCTURE_NOTIFY |
+                x::EventMask::SUBSTRUCTURE_REDIRECT
             )],
         });
 
-        conn.check_request(cookie)
-            .map_err(|_| Error::AlreadyRunning)?;
+        conn.check_request(cookie).map_err(|_| Error::AlreadyRunning)?;
 
         let keys = KeyManager::new(&conn)?;
-        dbg!(0);
+        let adapter = Adapter::new(conn, root);
 
         let wm = WindowManager {
-            conn: conn,
-            root: root,
-            signal: Arc::new(AtomicUsize::new(0)),
             keys: keys,
-            pending: Vec::new(),
-            monitors: monitors,
-            layout: LeftMaster::new(),
+            adapter: adapter,
         };
-
-        signal_hook::flag::register_usize(SIGCHLD, Arc::clone(&wm.signal), SIGCHLD as usize)
-            .map_err(|e| Error::SignalError(e))?;
-        signal_hook::flag::register_usize(SIGINT, Arc::clone(&wm.signal), SIGINT as usize)
-            .map_err(|e| Error::SignalError(e))?;
-
-        dbg!(1);
-        Self::reap()?;
-        dbg!(2);
 
         Ok(wm)
     }
 
     pub fn next(&mut self) -> Result<Event<T>, Error> {
-        self.sync()?;
+        let event = self.adapter.conn.wait_for_event()?;
 
-        let event = self.conn.wait_for_event()?;
-
-        const SIGCHLD_U: usize = SIGCHLD as usize;
-        const SIGINT_U: usize = SIGINT as usize;
-
-        match self.signal.load(Ordering::Relaxed) {
-            SIGCHLD_U => {
-                Self::reap()?;
-            }
-            SIGINT_U => {
-                return Ok(Event::Interrupt);
-            }
-            _ => {}
-        }
-
-        match event {
+        let ret = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let value = self.keys.get(e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             }
-            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => Ok(Event::Map(e.window())),
-            xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
-                self.configure(e);
+            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => {
+                self.map(e)?;
                 Ok(Event::Empty)
-            }
-            _ => Ok(Event::Empty),
-        }
+            },
+            xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
+                self.configure(e)?;
+                Ok(Event::Empty)
+            },
+            _ => {
+                Ok(Event::Empty)
+            },
+        };
+
+        ret
     }
 
-    pub fn spawn(&self, cmd: &str) -> Result<(), Error> {
+    pub fn spawn(&self, cmd: &str) {
         if let Some(args) = shlex::split(cmd) {
             if let Ok(Fork::Child) = fork::fork() {
+                unsafe {
+                    xcb_disconnect(self.adapter.conn.get_raw_conn());
+                }
+
                 fork::setsid().expect("setsid failed");
 
                 Command::new(&args[0])
@@ -138,82 +121,71 @@ impl<T: Copy + std::fmt::Debug> WindowManager<T> {
                     .expect(&format!("process failed: {}", cmd));
             }
         }
-
-        Ok(())
     }
 
     pub fn bind(&mut self, m: x::KeyButMask, k: Keysym, v: T) -> Result<(), Error> {
-        self.keys.bind(&self.conn, self.root, m, k, v)
+        self.keys.bind(&mut self.adapter, m, k, v)
+    }
+}
+
+impl<T: Copy> WindowManager<T> {
+    fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<(), Error> {
+        let mask = event.value_mask();
+        let mut values = Vec::with_capacity(7);
+
+        if mask.contains(xcb::x::ConfigWindowMask::X) {
+            values.push(x::ConfigWindow::X(event.x() as i32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::Y) {
+            values.push(x::ConfigWindow::Y(event.y() as i32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::WIDTH) {
+            values.push(x::ConfigWindow::Width(event.width() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::HEIGHT) {
+            values.push(x::ConfigWindow::Height(event.height() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::BORDER_WIDTH) {
+            values.push(x::ConfigWindow::BorderWidth(event.border_width() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::SIBLING) {
+            values.push(x::ConfigWindow::Sibling(event.sibling()));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::STACK_MODE) {
+            values.push(x::ConfigWindow::StackMode(event.stack_mode()));
+        }
+
+        let cfg = x::ConfigureWindow {
+            window: event.window(),
+            value_list: values.as_slice(),
+        };
+
+        let cookie = self.adapter.conn.send_request_checked(&cfg);
+        self.adapter.conn.check_request(cookie)?;
+
+        Ok(())
     }
 
-    pub fn map(&mut self, win: x::Window) {
-        self.request(&x::ChangeWindowAttributes {
-            window: win,
-            value_list: &[xcb::x::Cw::EventMask(x::EventMask::SUBSTRUCTURE_REDIRECT)],
+    fn map(&mut self, e: &x::MapRequestEvent) -> Result<(), Error> {
+        let cookie = self.adapter.conn.send_request_checked(&x::MapWindow {
+            window: e.window()
         });
 
-        self.request(&x::MapWindow { window: win });
-    }
-
-    pub fn sync(&mut self) -> Result<(), Error> {
-        /* is there a way to just scan for errors? */
-        for cookie in self.pending.drain(..) {
-            self.conn.check_request(cookie)?;
-        }
+        self.adapter.conn.check_request(cookie)?;
 
         Ok(())
     }
 }
 
-impl<T> WindowManager<T> {
-    fn request<R>(&mut self, req: &R)
-    where
-        R: xcb::RequestWithoutReply,
-    {
-        let cookie = self.conn.send_request_checked(req);
-        self.pending.push(cookie);
-    }
-
-    fn configure(&mut self, e: &x::ConfigureRequestEvent) {
-        let r = self.layout.arrange(&self.monitors[0].area);
-
-        self.request(&x::ConfigureWindow {
-            window: e.window(),
-            value_list: &[
-                x::ConfigWindow::X(r.x as i32),
-                x::ConfigWindow::Y(r.y as i32),
-                x::ConfigWindow::Width(r.w as u32),
-                x::ConfigWindow::Height(r.h as u32),
-            ],
-        });
-    }
-
-    fn reap() -> Result<bool, Error> {
-        let mut zombie = false;
-
-        loop {
-            let rv =
-                unsafe { libc::waitpid(-1, ptr::null::<*const i32>() as *mut i32, libc::WNOHANG) };
-
-            if rv < 0 {
-                let e = std::io::Error::last_os_error();
-                let errno = std::io::Error::raw_os_error(&e);
-                match errno {
-                    Some(libc::ECHILD) => break Ok(zombie),
-                    Some(_) => break Err(Error::IoError(e)),
-                    None => unreachable!(),
-                }
-            } else if rv == 0 {
-                break Ok(zombie);
-            } else {
-                zombie = true;
-            }
-        }
-    }
-}
-
-impl<T> AsRawFd for WindowManager<T> {
+impl<T: Copy> AsRawFd for WindowManager<T> {
+    /* for use with epoll etc... */
     fn as_raw_fd(&self) -> RawFd {
-        self.conn.as_raw_fd()
+        self.adapter.conn.as_raw_fd()
     }
 }
