@@ -31,26 +31,9 @@ pub enum Event<T> {
     UserEvent(T),
 }
 
-extern "C" {
-    #[link(xcb)]
-    fn xcb_disconnect(c: *mut xcb::ffi::xcb_connection_t);
-}
-
-fn connect(name: Option<&str>) -> Result<(xcb::Connection, i32), Error> {
-    let (conn, main) = xcb::Connection::connect(name)?;
-    let fd = conn.as_raw_fd();
-
-    unsafe {
-        let mut fl = libc::fcntl(fd, libc::F_GETFD);
-        libc::fcntl(fd, libc::F_SETFD, fl | libc::FD_CLOEXEC);
-    }
-
-    Ok((conn, main))
-}
-
 impl<T: Copy> WindowManager<T> {
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
-        let (conn, main) = connect(name)?;
+        let (conn, main) = xcb::Connection::connect(name)?;
 
         let setup = conn.get_setup();
         let screen = setup
@@ -62,9 +45,9 @@ impl<T: Copy> WindowManager<T> {
         let cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
-                // x::EventMask::STRUCTURE_NOTIFY |
+                x::EventMask::STRUCTURE_NOTIFY |
                 x::EventMask::PROPERTY_CHANGE |
-                // x::EventMask::SUBSTRUCTURE_NOTIFY |
+                x::EventMask::SUBSTRUCTURE_NOTIFY |
                 x::EventMask::SUBSTRUCTURE_REDIRECT
             )],
         });
@@ -109,16 +92,18 @@ impl<T: Copy> WindowManager<T> {
     pub fn spawn(&self, cmd: &str) {
         if let Some(args) = shlex::split(cmd) {
             if let Ok(Fork::Child) = fork::fork() {
-                unsafe {
-                    xcb_disconnect(self.adapter.conn.get_raw_conn());
-                }
-
                 fork::setsid().expect("setsid failed");
 
-                Command::new(&args[0])
-                    .args(&args[1..])
-                    .spawn()
-                    .expect(&format!("process failed: {}", cmd));
+                let cs: Vec<_> = args.into_iter().map(|x| {
+                    std::ffi::CString::new(x)
+                        .expect("spawn: invalid arguments")
+                        .into_raw()
+                }).collect();
+
+                unsafe {
+                    libc::execvp(cs[0], (&cs[..]).as_ptr() as *const *const i8);
+                }
+                unreachable!();
             }
         }
     }
