@@ -1,6 +1,9 @@
+use std::sync::Arc;
 use std::os::unix::prelude::{AsRawFd, RawFd};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fork::Fork;
+use signal_hook::consts::signal::*;
 use xcb::x::{self, Keysym, Keycode};
 
 use crate::error::Error;
@@ -27,8 +30,7 @@ pub trait Layout {
     fn arrange(&mut self, scope: &Rect, count: usize, index: usize) -> Rect;
 }
 
-pub struct LeftMaster {
-}
+pub struct LeftMaster { }
 
 impl Layout for LeftMaster {
 
@@ -145,10 +147,12 @@ pub struct WindowManager<T: Copy> {
     keys: KeyManager<T>,
     selmon: usize,
     monitors: Vec<Monitor>,
+    signal: Arc<AtomicUsize>,
 }
 
 pub enum Event<T> {
     Empty,
+    Interrupt,
     UserEvent(T),
 }
 
@@ -182,14 +186,35 @@ impl<T: Copy> WindowManager<T> {
             keys: keys,
             selmon: 0,
             monitors: monitors,
+            signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn, root),
         };
+
+        signal_hook::flag::register_usize(SIGCHLD, Arc::clone(&wm.signal), SIGCHLD as usize)
+            .map_err(|e| Error::SignalError(e))?;
+        signal_hook::flag::register_usize(SIGINT, Arc::clone(&wm.signal), SIGINT as usize)
+            .map_err(|e| Error::SignalError(e))?;
+
+        Self::reap()?;
 
         Ok(wm)
     }
 
     pub fn next(&mut self) -> Result<Event<T>, Error> {
         let event = self.adapter.conn.wait_for_event()?;
+
+        const SIGCHLD_U: usize = SIGCHLD as usize;
+        const SIGINT_U: usize = SIGINT as usize;
+
+        match self.signal.load(Ordering::Relaxed) {
+            SIGCHLD_U => {
+                Self::reap()?;
+            }
+            SIGINT_U => {
+                return Ok(Event::Interrupt);
+            }
+            _ => {}
+        }
 
         let ret = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
@@ -301,6 +326,31 @@ impl<T: Copy> WindowManager<T> {
         self.monitors.iter_mut()
             .find_map(|x| x.client_mut(window))
     }
+
+    fn reap() -> Result<bool, Error> {
+        let mut zombie = false;
+
+        loop {
+            let rv =
+                unsafe { libc::waitpid(-1, std::ptr::null::<*const i32>() as *mut i32, libc::WNOHANG) };
+
+            if rv < 0 {
+                let e = std::io::Error::last_os_error();
+                let errno = std::io::Error::raw_os_error(&e);
+                match errno {
+                    Some(libc::ECHILD) => break Ok(zombie),
+                    Some(_) => break Err(Error::IoError(e)),
+                    None => unreachable!(),
+                }
+            } else if rv == 0 {
+                break Ok(zombie);
+            } else {
+                zombie = true;
+            }
+        }
+    }
+
+
 }
 
 impl<T: Copy> AsRawFd for WindowManager<T> {

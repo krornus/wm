@@ -6,6 +6,8 @@ pub enum Error {
     AlreadyRunning,
     #[error("screen not found")]
     MissingScreen,
+    #[error("failed to register signal handler")]
+    SignalError(std::io::Error),
     #[error("failed to connect to X11 server")]
     ConnectionError(#[from] xcb::ConnError),
     #[error("io error")]
