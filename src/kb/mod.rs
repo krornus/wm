@@ -105,6 +105,7 @@ impl KeyMap {
 }
 
 pub struct KeyManager<T> {
+    root: x::Window,
     keymap: KeyMap,
     num_lock: x::KeyButMask,
     caps_lock: x::KeyButMask,
@@ -115,6 +116,14 @@ pub struct KeyManager<T> {
 impl<T: Copy> KeyManager<T> {
     /* TODO: support refreshing mappings */
     pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
+        let setup = conn.get_setup();
+        let screen = setup
+            .roots()
+            .next()
+            .ok_or(Error::MissingScreen)?;
+
+        let root = screen.root();
+
         let mut keymap = KeyMap::new(conn)?;
 
         let num_lock = keymap.mask(keysym::Num_Lock)?;
@@ -122,6 +131,7 @@ impl<T: Copy> KeyManager<T> {
         let scroll_lock = keymap.mask(keysym::Scroll_Lock)?;
 
         Ok(KeyManager {
+            root: root,
             keymap: keymap,
             num_lock: num_lock,
             caps_lock: caps_lock,
@@ -131,19 +141,14 @@ impl<T: Copy> KeyManager<T> {
     }
 
     #[inline]
-    fn grab(&self,
-        adapter: &mut Adapter,
-        modifiers: x::KeyButMask,
-        keycode: Keycode) -> xcb::VoidCookieChecked
-    {
+    fn grab(&self, adapter: &mut Adapter, modifiers: x::KeyButMask, keycode: Keycode) {
         let m = x::ModMask::from_bits(modifiers.bits()).unwrap();
-        let root = adapter.root;
 
         println!("grab: [{:?} + {:?}]", modifiers, keycode);
 
-        adapter.conn.send_request_checked(&x::GrabKey {
+        adapter.request(&x::GrabKey {
             owner_events: true,
-            grab_window: root,
+            grab_window: self.root,
             modifiers: m,
             key: keycode as u8,
             pointer_mode: x::GrabMode::Async,
@@ -158,34 +163,20 @@ impl<T: Copy> KeyManager<T> {
         k: Keysym,
         v: T,
     ) -> Result<(), Error> {
-        let mut cookies = Vec::with_capacity(8);
-
         for kc in self.keymap.keycodes(k) {
             self.bindings.insert((m, kc), v);
 
-            let c = self.grab(adapter, m, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.num_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.caps_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.scroll_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.caps_lock | self.num_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.scroll_lock | self.num_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.scroll_lock | self.caps_lock, kc);
-            cookies.push(c);
-            let c = self.grab(adapter, m | self.num_lock | self.scroll_lock | self.caps_lock, kc);
-            cookies.push(c);
+            self.grab(adapter, m, kc);
+            self.grab(adapter, m | self.num_lock, kc);
+            self.grab(adapter, m | self.caps_lock, kc);
+            self.grab(adapter, m | self.scroll_lock, kc);
+            self.grab(adapter, m | self.caps_lock | self.num_lock, kc);
+            self.grab(adapter, m | self.scroll_lock | self.num_lock, kc);
+            self.grab(adapter, m | self.scroll_lock | self.caps_lock, kc);
+            self.grab(adapter, m | self.num_lock | self.scroll_lock | self.caps_lock, kc);
         }
 
-        println!("{:?}", cookies);
-
-        for cookie in cookies {
-            adapter.conn.check_request(cookie)?;
-        }
+        adapter.check()?;
 
         Ok(())
     }

@@ -89,6 +89,37 @@ impl Layout for Monacle {
     }
 }
 
+pub struct Adapter {
+    pub conn: xcb::Connection,
+    pending: Vec<xcb::VoidCookieChecked>,
+}
+
+impl Adapter {
+    pub fn new(conn: xcb::Connection) -> Self {
+        Adapter {
+            conn: conn,
+            pending: vec![],
+        }
+    }
+
+    pub fn request<R>(&mut self, request: &R)
+    where
+        R: xcb::RequestWithoutReply,
+    {
+        let cookie = self.conn.send_request_checked(request);
+        self.pending.push(cookie);
+    }
+
+    pub fn check(&mut self) -> Result<bool, Error> {
+        let ok = self.pending.len() > 0;
+        for c in self.pending.drain(..) {
+            self.conn.check_request(c)?;
+        }
+
+        Ok(ok)
+    }
+}
+
 pub struct Client {
     scope: Rect,
     window: x::Window,
@@ -104,10 +135,11 @@ impl Client {
         }
     }
 
-    fn resize(&mut self, adapter: &mut Adapter, scope: Rect) -> Option<xcb::VoidCookieChecked> {
+    fn resize(&mut self, adapter: &mut Adapter, scope: Rect) {
         if self.scope != scope {
             self.scope = scope;
-            let cookie = adapter.conn.send_request_checked(&x::ConfigureWindow {
+
+            adapter.request(&x::ConfigureWindow {
                 window: self.window,
                 value_list: &[
                     x::ConfigWindow::X(self.scope.x as i32),
@@ -116,36 +148,30 @@ impl Client {
                     x::ConfigWindow::Height(self.scope.h as u32),
                 ],
             });
-
-            Some(cookie)
-        } else {
-            None
         }
     }
 
-    fn show(&mut self, adapter: &mut Adapter, visible: bool) -> Option<xcb::VoidCookieChecked> {
+    fn show(&mut self, adapter: &mut Adapter, visible: bool) {
         if self.visible != visible {
             self.visible = visible;
             if visible {
-                Some(adapter.conn.send_request_checked(&x::MapWindow {
+                adapter.request(&x::MapWindow {
                     window: self.window,
-                }))
+                });
             } else {
-                Some(adapter.conn.send_request_checked(&x::UnmapWindow {
+                adapter.request(&x::UnmapWindow {
                     window: self.window,
-                }))
+                });
             }
-        } else {
-            None
         }
     }
 
-    fn focus(&mut self, adapter: &mut Adapter) -> xcb::VoidCookieChecked {
-        adapter.conn.send_request_checked(&x::SetInputFocus {
+    fn focus(&mut self, adapter: &mut Adapter) {
+        adapter.request(&x::SetInputFocus {
             revert_to: x::InputFocus::PointerRoot,
             focus: self.window,
             time: x::CURRENT_TIME,
-        })
+        });
     }
 }
 
@@ -184,27 +210,17 @@ impl Monitor {
 
     fn arrange(&mut self, adapter: &mut Adapter) -> Result<(), Error> {
         let count = self.clients.len();
-        let mut cookies = Vec::with_capacity(count);
 
         for (i, client) in self.clients.iter_mut().enumerate() {
             if let Some(scope) = self.layout.arrange(&self.scope, count, i, false) {
-                if let Some(cookie) = client.show(adapter, true) {
-                    cookies.push(cookie);
-                }
-
-                if let Some(cookie) = client.resize(adapter, scope) {
-                    cookies.push(cookie);
-                }
+                client.show(adapter, true);
+                client.resize(adapter, scope);
             } else {
-                if let Some(cookie) = client.show(adapter, false) {
-                    cookies.push(cookie);
-                }
+                client.show(adapter, false);
             }
         }
 
-        for c in cookies {
-            adapter.conn.check_request(c)?;
-        }
+        adapter.check()?;
 
         Ok(())
     }
@@ -235,33 +251,17 @@ impl Monitor {
 
         });
 
-        let cookie = if let Some(i) = self.selclient {
-            self.clients[i].focus(adapter)
+        if let Some(i) = self.selclient {
+            self.clients[i].focus(adapter);
         } else {
-            adapter.conn.send_request_checked(&x::SetInputFocus {
+            adapter.request(&x::SetInputFocus {
                 revert_to: x::InputFocus::PointerRoot,
                 focus: self.root,
                 time: x::CURRENT_TIME,
-            })
+            });
         };
 
-        adapter.conn.check_request(cookie)?;
-
         self.arrange(adapter)
-    }
-}
-
-pub struct Adapter {
-    pub root: x::Window,
-    pub conn: xcb::Connection,
-}
-
-impl Adapter {
-    pub fn new(conn: xcb::Connection, root: x::Window) -> Self {
-        Adapter {
-            root: root,
-            conn: conn,
-        }
     }
 }
 
@@ -310,7 +310,7 @@ impl<T: Copy> WindowManager<T> {
             selmon: 0,
             monitors: monitors,
             signal: Arc::new(AtomicUsize::new(0)),
-            adapter: Adapter::new(conn, root),
+            adapter: Adapter::new(conn),
         };
 
         signal_hook::flag::register_usize(SIGCHLD, Arc::clone(&wm.signal), SIGCHLD as usize)
