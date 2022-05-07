@@ -154,6 +154,7 @@ impl Client {
     fn show(&mut self, adapter: &mut Adapter, visible: bool) {
         if self.visible != visible {
             self.visible = visible;
+
             if visible {
                 adapter.request(&x::MapWindow {
                     window: self.window,
@@ -167,11 +168,13 @@ impl Client {
     }
 
     fn focus(&mut self, adapter: &mut Adapter) {
-        adapter.request(&x::SetInputFocus {
-            revert_to: x::InputFocus::PointerRoot,
-            focus: self.window,
-            time: x::CURRENT_TIME,
-        });
+        if self.visible {
+            adapter.request(&x::SetInputFocus {
+                revert_to: x::InputFocus::PointerRoot,
+                focus: self.window,
+                time: x::CURRENT_TIME,
+            });
+        }
     }
 }
 
@@ -212,7 +215,12 @@ impl Monitor {
         let count = self.clients.len();
 
         for (i, client) in self.clients.iter_mut().enumerate() {
-            if let Some(scope) = self.layout.arrange(&self.scope, count, i, false) {
+            let focus = match self.selclient {
+                Some(x) => x == i,
+                _ => false,
+            };
+
+            if let Some(scope) = self.layout.arrange(&self.scope, count, i, focus) {
                 client.show(adapter, true);
                 client.resize(adapter, scope);
             } else {
@@ -227,14 +235,19 @@ impl Monitor {
 
     fn add(&mut self, adapter: &mut Adapter, client: Client) -> Result<&mut Client, Error> {
         self.clients.push(client);
-        self.arrange(adapter)?;
         let idx = self.clients.len() - 1;
+        self.selclient = Some(idx);
+
+        self.arrange(adapter)?;
+
         Ok(&mut self.clients[idx])
     }
 
     fn remove(&mut self, adapter: &mut Adapter, window: x::Window) -> Result<(), Error> {
         if let Some(pos) = self.clients.iter().position(|x| x.window == window) {
             self.clients.remove(pos);
+            let idx = self.clients.len() - 1;
+            self.selclient = Some(idx);
             self.arrange(adapter)
         } else {
             Ok(())
@@ -302,7 +315,7 @@ impl<T: Copy> WindowManager<T> {
 
         let keys = KeyManager::new(&conn)?;
         let monitors = setup.roots().map(|x| {
-            Monitor::new(x, LeftMaster {})
+            Monitor::new(x, Monacle {})
         }).collect();
 
         let wm = WindowManager {
@@ -456,14 +469,19 @@ impl<T: Copy> WindowManager<T> {
     }
 
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
-        if self.client_mut(e.window()).is_none() {
-            let c = Client::new(e.window());
-            self.monitors[self.selmon].add(&mut self.adapter, c)?;
-        }
+        let c = match self.client_mut(e.window()) {
+            Some(c) => c,
+            None => {
+                self.monitors[self.selmon].add(
+                    &mut self.adapter, Client::new(e.window()))?
+            }
+        };
 
-        self.adapter.conn.send_and_check_request(&x::MapWindow {
-            window: e.window()
-        })?;
+        if c.visible {
+            self.adapter.conn.send_and_check_request(&x::MapWindow {
+                window: e.window()
+            })?;
+        }
 
         Ok(Event::Empty)
     }
