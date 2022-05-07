@@ -9,6 +9,7 @@ use xcb::x::{self, Keysym, Keycode};
 use crate::error::Error;
 use crate::kb::KeyManager;
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct Rect {
     pub x: usize,
     pub y: usize,
@@ -27,15 +28,14 @@ impl Rect {
 }
 
 pub trait Layout {
-    fn arrange(&mut self, scope: &Rect, count: usize, index: usize) -> Rect;
+    fn arrange(&mut self, scope: &Rect, count: usize, index: usize, focus: bool) -> Option<Rect>;
 }
 
 pub struct LeftMaster { }
 
 impl Layout for LeftMaster {
-
-    fn arrange(&mut self, scope: &Rect, count: usize, index: usize) -> Rect {
-        if index == 0 {
+    fn arrange(&mut self, scope: &Rect, count: usize, index: usize, _: bool) -> Option<Rect> {
+        let rect = if index == 0 {
             if count == 1 {
                 Rect::new(0, 0, scope.w, scope.h)
             } else {
@@ -48,6 +48,43 @@ impl Layout for LeftMaster {
             let posh = boxh * (index - 1);
 
             Rect::new(scope.center_x(), posh, scope.w, posh + boxh)
+        };
+
+        Some(rect)
+    }
+}
+
+pub struct RightMaster { }
+
+impl Layout for RightMaster {
+    fn arrange(&mut self, scope: &Rect, count: usize, index: usize, _: bool) -> Option<Rect> {
+        let rect = if index == 0 {
+            if count == 1 {
+                Rect::new(0, 0, scope.w, scope.h)
+            } else {
+                Rect::new(scope.center_x(), 0, scope.center_x(), scope.h)
+            }
+        } else {
+            /* height of one box */
+            let boxh = scope.h / (count - 1);
+            /* pos of one box */
+            let posh = boxh * (index - 1);
+
+            Rect::new(0, posh, scope.center_x(), posh + boxh)
+        };
+
+        Some(rect)
+    }
+}
+
+pub struct Monacle { }
+
+impl Layout for Monacle {
+    fn arrange(&mut self, scope: &Rect, _: usize, _: usize, focus: bool) -> Option<Rect> {
+        if focus {
+            Some(scope.clone())
+        } else {
+            None
         }
     }
 }
@@ -55,6 +92,7 @@ impl Layout for LeftMaster {
 pub struct Client {
     scope: Rect,
     window: x::Window,
+    visible: bool,
 }
 
 impl Client {
@@ -62,20 +100,51 @@ impl Client {
         Client {
             scope: Rect::new(0, 0, 1, 1),
             window: window,
+            visible: true,
         }
     }
 
-    fn resize(&mut self, adapter: &mut Adapter, scope: Rect) -> xcb::VoidCookieChecked {
-        self.scope = scope;
+    fn resize(&mut self, adapter: &mut Adapter, scope: Rect) -> Option<xcb::VoidCookieChecked> {
+        if self.scope != scope {
+            self.scope = scope;
+            let cookie = adapter.conn.send_request_checked(&x::ConfigureWindow {
+                window: self.window,
+                value_list: &[
+                    x::ConfigWindow::X(self.scope.x as i32),
+                    x::ConfigWindow::Y(self.scope.y as i32),
+                    x::ConfigWindow::Width(self.scope.w as u32),
+                    x::ConfigWindow::Height(self.scope.h as u32),
+                ],
+            });
 
-        adapter.conn.send_request_checked(&x::ConfigureWindow {
-            window: self.window,
-            value_list: &[
-                x::ConfigWindow::X(self.scope.x as i32),
-                x::ConfigWindow::Y(self.scope.y as i32),
-                x::ConfigWindow::Width(self.scope.w as u32),
-                x::ConfigWindow::Height(self.scope.h as u32),
-            ],
+            Some(cookie)
+        } else {
+            None
+        }
+    }
+
+    fn show(&mut self, adapter: &mut Adapter, visible: bool) -> Option<xcb::VoidCookieChecked> {
+        if self.visible != visible {
+            self.visible = visible;
+            if visible {
+                Some(adapter.conn.send_request_checked(&x::MapWindow {
+                    window: self.window,
+                }))
+            } else {
+                Some(adapter.conn.send_request_checked(&x::UnmapWindow {
+                    window: self.window,
+                }))
+            }
+        } else {
+            None
+        }
+    }
+
+    fn focus(&mut self, adapter: &mut Adapter) -> xcb::VoidCookieChecked {
+        adapter.conn.send_request_checked(&x::SetInputFocus {
+            revert_to: x::InputFocus::PointerRoot,
+            focus: self.window,
+            time: x::CURRENT_TIME,
         })
     }
 }
@@ -84,6 +153,7 @@ pub struct Monitor {
     scope: Rect,
     root: x::Window,
     clients: Vec<Client>,
+    selclient: Option<usize>,
     layout: Box<dyn Layout>,
 }
 
@@ -99,6 +169,7 @@ impl Monitor {
             scope: scope,
             root: scr.root(),
             clients: vec![],
+            selclient: None,
             layout: Box::new(layout),
         }
     }
@@ -116,8 +187,19 @@ impl Monitor {
         let mut cookies = Vec::with_capacity(count);
 
         for (i, client) in self.clients.iter_mut().enumerate() {
-            let scope = self.layout.arrange(&self.scope, count, i);
-            cookies.push(client.resize(adapter, scope));
+            if let Some(scope) = self.layout.arrange(&self.scope, count, i, false) {
+                if let Some(cookie) = client.show(adapter, true) {
+                    cookies.push(cookie);
+                }
+
+                if let Some(cookie) = client.resize(adapter, scope) {
+                    cookies.push(cookie);
+                }
+            } else {
+                if let Some(cookie) = client.show(adapter, false) {
+                    cookies.push(cookie);
+                }
+            }
         }
 
         for c in cookies {
@@ -125,6 +207,47 @@ impl Monitor {
         }
 
         Ok(())
+    }
+
+    fn add(&mut self, adapter: &mut Adapter, client: Client) -> Result<&mut Client, Error> {
+        self.clients.push(client);
+        self.arrange(adapter)?;
+        let idx = self.clients.len() - 1;
+        Ok(&mut self.clients[idx])
+    }
+
+    fn remove(&mut self, adapter: &mut Adapter, window: x::Window) -> Result<(), Error> {
+        if let Some(pos) = self.clients.iter().position(|x| x.window == window) {
+            self.clients.remove(pos);
+            self.arrange(adapter)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn focus(&mut self, adapter: &mut Adapter, selclient: Option<usize>) -> Result<(), Error> {
+        self.selclient = selclient.map(|x| {
+            if x >= self.clients.len() {
+                self.clients.len().saturating_sub(1)
+            } else {
+                x
+            }
+
+        });
+
+        let cookie = if let Some(i) = self.selclient {
+            self.clients[i].focus(adapter)
+        } else {
+            adapter.conn.send_request_checked(&x::SetInputFocus {
+                revert_to: x::InputFocus::PointerRoot,
+                focus: self.root,
+                time: x::CURRENT_TIME,
+            })
+        };
+
+        adapter.conn.check_request(cookie)?;
+
+        self.arrange(adapter)
     }
 }
 
@@ -216,25 +339,30 @@ impl<T: Copy> WindowManager<T> {
             _ => {}
         }
 
-        let ret = match event {
+        match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let value = self.keys.get(e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             }
             xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => {
-                self.map(e)?;
-                Ok(Event::Empty)
+                self.map(e)
+            },
+            xcb::Event::X(xcb::x::Event::UnmapNotify(ref e)) => {
+                self.unmap(e)
+            },
+            xcb::Event::X(xcb::x::Event::DestroyNotify(ref e)) => {
+                self.destroy(e)
+            },
+            xcb::Event::X(xcb::x::Event::EnterNotify(ref e)) => {
+                self.enter(e)
             },
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
-                self.configure(e)?;
-                Ok(Event::Empty)
+                self.configure(e)
             },
             _ => {
                 Ok(Event::Empty)
             },
-        };
-
-        ret
+        }
     }
 
     pub fn spawn(&self, cmd: &str) {
@@ -260,13 +388,34 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
+    pub fn focus(&mut self, index: Option<isize>) -> Result<(), Error> {
+        let selclient = if let Some(x) = index {
+            let now = match self.monitors[self.selmon].selclient {
+                Some(x) => x,
+                None => 0,
+            };
+
+            let next = if x < 0 {
+                now.saturating_sub(x.saturating_neg() as usize)
+            } else {
+                now.saturating_add(x as usize)
+            };
+
+            Some(next)
+        } else {
+            None
+        };
+
+        self.monitors[self.selmon].focus(&mut self.adapter, selclient)
+    }
+
     pub fn bind(&mut self, m: x::KeyButMask, k: Keysym, v: T) -> Result<(), Error> {
         self.keys.bind(&mut self.adapter, m, k, v)
     }
 }
 
 impl<T: Copy> WindowManager<T> {
-    fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<(), Error> {
+    fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<Event<T>, Error> {
         let mask = event.value_mask();
         let mut values = Vec::with_capacity(7);
 
@@ -303,18 +452,53 @@ impl<T: Copy> WindowManager<T> {
             value_list: values.as_slice(),
         })?;
 
-        Ok(())
+        Ok(Event::Empty)
     }
 
-    fn map(&mut self, e: &x::MapRequestEvent) -> Result<(), Error> {
-        self.monitors[self.selmon].clients.push(Client::new(e.window()));
-        self.monitors[self.selmon].arrange(&mut self.adapter)?;
+    fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
+        if self.client_mut(e.window()).is_none() {
+            let c = Client::new(e.window());
+            self.monitors[self.selmon].add(&mut self.adapter, c)?;
+        }
 
         self.adapter.conn.send_and_check_request(&x::MapWindow {
             window: e.window()
         })?;
 
-        Ok(())
+        Ok(Event::Empty)
+    }
+
+    fn unmap(&mut self, e: &x::UnmapNotifyEvent) -> Result<Event<T>, Error> {
+        self.client_mut(e.window())
+            .map(|c| c.visible = false);
+
+        Ok(Event::Empty)
+    }
+
+    fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
+        self.monitors[self.selmon].remove(&mut self.adapter, e.window())?;
+        Ok(Event::Empty)
+    }
+
+    fn enter(&mut self, e: &x::EnterNotifyEvent) -> Result<Event<T>, Error> {
+        if let Some((i, j)) = self.focus_window(e.event()) {
+            self.selmon = i;
+            self.monitors[self.selmon].focus(&mut self.adapter, Some(j))?;
+        }
+
+        Ok(Event::Empty)
+    }
+
+    fn focus_window(&mut self, window: x::Window) -> Option<(usize, usize)> {
+        for (i, mon) in self.monitors.iter().enumerate() {
+            for (j, client) in mon.clients.iter().enumerate() {
+                if client.window == window {
+                    return Some((i, j))
+                }
+            }
+        }
+
+        None
     }
 
     fn client(&self, window: x::Window) -> Option<&Client> {
@@ -331,8 +515,11 @@ impl<T: Copy> WindowManager<T> {
         let mut zombie = false;
 
         loop {
-            let rv =
-                unsafe { libc::waitpid(-1, std::ptr::null::<*const i32>() as *mut i32, libc::WNOHANG) };
+            let rv = unsafe {
+                libc::waitpid(
+                    -1, std::ptr::null::<*const i32>() as *mut i32,
+                    libc::WNOHANG)
+            };
 
             if rv < 0 {
                 let e = std::io::Error::last_os_error();
@@ -349,8 +536,6 @@ impl<T: Copy> WindowManager<T> {
             }
         }
     }
-
-
 }
 
 impl<T: Copy> AsRawFd for WindowManager<T> {

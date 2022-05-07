@@ -1,2 +1,5 @@
 selmon:
     if you open a client with no attached monitor, does this break
+
+client:
+    apply changes to client struct (i.e. visible) after cookie check
