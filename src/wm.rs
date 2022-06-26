@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::os::unix::prelude::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
 
 use fork::Fork;
 use signal_hook::consts::signal::*;
@@ -8,6 +9,8 @@ use xcb::x::{self, Keysym, Keycode};
 
 use crate::error::Error;
 use crate::kb::KeyManager;
+
+const DEFAULT_TAGS: u64 = 0x1;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Rect {
@@ -131,7 +134,7 @@ impl Client {
         Client {
             scope: Rect::new(0, 0, 1, 1),
             window: window,
-            visible: true,
+            visible: false,
         }
     }
 
@@ -178,7 +181,7 @@ impl Client {
     }
 }
 
-pub struct Monitor {
+pub struct Screen {
     scope: Rect,
     root: x::Window,
     clients: Vec<Client>,
@@ -186,7 +189,7 @@ pub struct Monitor {
     layout: Box<dyn Layout>,
 }
 
-impl Monitor {
+impl Screen {
     fn new<T: 'static + Layout>(scr: &x::Screen, layout: T) -> Self {
         let scope = Rect::new(
             0, 0,
@@ -194,13 +197,21 @@ impl Monitor {
             scr.height_in_pixels() as usize,
         );
 
-        Monitor {
+        Screen {
             scope: scope,
             root: scr.root(),
             clients: vec![],
             selclient: None,
             layout: Box::new(layout),
         }
+    }
+
+    pub fn focus(&self) -> Option<&Client> {
+        self.selclient.map(|x| &self.clients[x])
+    }
+
+    pub fn focus_mut(&mut self) -> Option<&mut Client> {
+        self.selclient.map(move |x| &mut self.clients[x])
     }
 
     fn client(&self, window: x::Window) -> Option<&Client> {
@@ -254,15 +265,7 @@ impl Monitor {
         }
     }
 
-    fn focus(&mut self, adapter: &mut Adapter, selclient: Option<usize>) -> Result<(), Error> {
-        self.selclient = selclient.map(|x| {
-            if x >= self.clients.len() {
-                self.clients.len().saturating_sub(1)
-            } else {
-                x
-            }
-
-        });
+   fn set_focus(&mut self, adapter: &mut Adapter, selclient: Option<usize>) -> Result<(), Error> {
 
         if let Some(i) = self.selclient {
             self.clients[i].focus(adapter);
@@ -278,11 +281,146 @@ impl Monitor {
     }
 }
 
+
+/* create a mask from a set of indices */
+macro_rules! mask {
+    ( $( $x:expr ),* ) => {
+        $( (1 << $x) )|*
+    };
+}
+
+pub type TagSetID = usize;
+
+struct TagSet {
+    tags: Vec<String>,
+}
+
+impl TagSet {
+    fn new(tags: Vec<&str>) -> Self {
+        if tags.len() > u64::BITS as usize {
+            /* TODO: probably use a bitvec */
+            panic!("too many tags (max: {})", u64::BITS);
+        }
+
+        let from = tags
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        TagSet {
+            tags: from,
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.tags.len()
+    }
+
+    #[inline]
+    fn index(&self, name: &str) -> Option<usize> {
+        self.tags.iter().position(|x| x == name)
+    }
+}
+
+pub struct TagSelection {
+    map: HashMap<TagSetID, u64>,
+}
+
+pub enum Tag {
+    On(u64),
+    Off(u64),
+    Toggle(u64),
+    Value(u64),
+}
+
+impl TagSelection {
+    pub fn new() -> Self {
+        TagSelection {
+            map: HashMap::new()
+        }
+    }
+
+    pub fn update(&mut self, identifier: TagSetID, tag: Tag) -> u64 {
+        let mut mask = self.map.get(&identifier).copied().unwrap_or(0);
+
+        mask = match tag {
+            Tag::On(m) => {
+                mask | m
+            },
+            Tag::Off(m) => {
+                mask & (!m)
+            },
+            Tag::Toggle(m) => {
+                mask ^ m
+            },
+            Tag::Value(m) => {
+                m
+            },
+        };
+
+        self.map.insert(identifier, mask);
+        mask
+    }
+
+    #[inline]
+    pub fn get(&self, identifier: TagSetID) -> Option<u64> {
+        self.map.get(&identifier).copied()
+    }
+}
+
+pub struct TagManager {
+    identifier: TagSetID,
+    selection: TagSelection,
+    tagsets: HashMap<TagSetID, TagSet>,
+}
+
+impl TagManager {
+    pub fn new() -> Self {
+        TagManager {
+            identifier: 0,
+            selection: TagSelection::new(),
+            tagsets: HashMap::new(),
+        }
+    }
+
+    #[inline]
+    pub fn update(&mut self, identifier: TagSetID, action: Tag) -> u64 {
+        self.selection.update(identifier, action)
+    }
+
+    pub fn add(&mut self, tags: Vec<&str>) -> TagSetID {
+        assert!(tags.len() > 0);
+        /* get id, update next id */
+        let identifier = self.identifier;
+        self.identifier = self.identifier + 1;
+        /* add the tagset */
+        self.tagsets.insert(identifier, TagSet::new(tags));
+        /* enable the default tag */
+        self.update(identifier, Tag::Value(mask!(0)));
+
+        identifier
+    }
+
+    pub fn visible(&self, selection: &TagSelection) -> bool {
+        for (identifier, mask) in selection.map.iter() {
+            if let Some(other) = self.selection.get(*identifier) {
+                if mask & other == 0 {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
 pub struct WindowManager<T: Copy> {
     adapter: Adapter,
     keys: KeyManager<T>,
+    tags: TagManager,
     selmon: usize,
-    monitors: Vec<Monitor>,
+    monitors: Vec<Screen>,
     signal: Arc<AtomicUsize>,
 }
 
@@ -293,6 +431,7 @@ pub enum Event<T> {
 }
 
 impl<T: Copy> WindowManager<T> {
+    /// Create a new WindowManager struct, with optional X11 display name
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
         let (conn, main) = xcb::Connection::connect(name)?;
 
@@ -315,13 +454,14 @@ impl<T: Copy> WindowManager<T> {
 
         let keys = KeyManager::new(&conn)?;
         let monitors = setup.roots().map(|x| {
-            Monitor::new(x, Monacle {})
+            Screen::new(x, LeftMaster {})
         }).collect();
 
         let wm = WindowManager {
             keys: keys,
             selmon: 0,
             monitors: monitors,
+            tags: TagManager::new(),
             signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn),
         };
@@ -336,6 +476,11 @@ impl<T: Copy> WindowManager<T> {
         Ok(wm)
     }
 
+    /// Get the next event from the queue. this may be combined with
+    /// polling via the AsRawFd trait of the WindowManager struct.
+    /// Note that this function handles signal interrupts for SIGINT
+    /// and SIGCHLD, so you should call next() if your polling is
+    /// interrupted by a signal.
     pub fn next(&mut self) -> Result<Event<T>, Error> {
         let event = self.adapter.conn.wait_for_event()?;
 
@@ -378,6 +523,11 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
+    pub fn tagset(&mut self, tagset: Vec<&str>) -> TagSetID {
+        self.tags.add(tagset)
+    }
+
+    /// spawn a subprogram
     pub fn spawn(&self, cmd: &str) {
         /* xcb opens its descriptors with CLOEXEC */
         if let Some(args) = shlex::split(cmd) {
@@ -401,7 +551,8 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
-    pub fn focus(&mut self, index: Option<isize>) -> Result<(), Error> {
+    /// move focus to an optional client
+    pub fn set_focus(&mut self, index: Option<isize>) -> Result<(), Error> {
         let selclient = if let Some(x) = index {
             let now = match self.monitors[self.selmon].selclient {
                 Some(x) => x,
@@ -419,15 +570,33 @@ impl<T: Copy> WindowManager<T> {
             None
         };
 
-        self.monitors[self.selmon].focus(&mut self.adapter, selclient)
+        self.monitors[self.selmon].set_focus(&mut self.adapter, selclient)
     }
 
+    pub fn focus(&self) -> Option<&Client> {
+        None
+    }
+
+    pub fn focus_mut(&mut self) -> Option<&mut Client> {
+        None
+    }
+
+    /// bind a (mask, key) combo to return a UserEvent when pressed
     pub fn bind(&mut self, m: x::KeyButMask, k: Keysym, v: T) -> Result<(), Error> {
         self.keys.bind(&mut self.adapter, m, k, v)
+    }
+
+    pub fn monitors(&self) -> &[Screen] {
+        &self.monitors
+    }
+
+    pub fn monitors_mut(&mut self) -> &mut [Screen] {
+        &mut self.monitors
     }
 }
 
 impl<T: Copy> WindowManager<T> {
+    /// handle a ConfigureRequestEvent, which is a request to configure a window's properties
     fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<Event<T>, Error> {
         let mask = event.value_mask();
         let mut values = Vec::with_capacity(7);
@@ -468,24 +637,21 @@ impl<T: Copy> WindowManager<T> {
         Ok(Event::Empty)
     }
 
+    /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
         let c = match self.client_mut(e.window()) {
             Some(c) => c,
             None => {
                 self.monitors[self.selmon].add(
-                    &mut self.adapter, Client::new(e.window()))?
+                    &mut self.adapter,
+                    Client::new(e.window()))?
             }
         };
-
-        if c.visible {
-            self.adapter.conn.send_and_check_request(&x::MapWindow {
-                window: e.window()
-            })?;
-        }
 
         Ok(Event::Empty)
     }
 
+    /// handle the UnmapNotifyEvent, which notifies us that a window has been unmapped (hidden)
     fn unmap(&mut self, e: &x::UnmapNotifyEvent) -> Result<Event<T>, Error> {
         self.client_mut(e.window())
             .map(|c| c.visible = false);
@@ -493,21 +659,24 @@ impl<T: Copy> WindowManager<T> {
         Ok(Event::Empty)
     }
 
+    /// handle the DestroyNotify, which notifies us that a window has been destroyed
     fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
         self.monitors[self.selmon].remove(&mut self.adapter, e.window())?;
         Ok(Event::Empty)
     }
 
+    /// handle the EnterNotifyEvent, which notifies us that focus has entered a given window
     fn enter(&mut self, e: &x::EnterNotifyEvent) -> Result<Event<T>, Error> {
-        if let Some((i, j)) = self.focus_window(e.event()) {
+        if let Some((i, j)) = self.client_index(e.event()) {
             self.selmon = i;
-            self.monitors[self.selmon].focus(&mut self.adapter, Some(j))?;
+            self.monitors[self.selmon].selclient = Some(j);
         }
 
         Ok(Event::Empty)
     }
 
-    fn focus_window(&mut self, window: x::Window) -> Option<(usize, usize)> {
+    /// get monitor, client indices based its window
+    fn client_index(&mut self, window: x::Window) -> Option<(usize, usize)> {
         for (i, mon) in self.monitors.iter().enumerate() {
             for (j, client) in mon.clients.iter().enumerate() {
                 if client.window == window {
@@ -519,16 +688,19 @@ impl<T: Copy> WindowManager<T> {
         None
     }
 
+    /// get a reference to a client based on its window
     fn client(&self, window: x::Window) -> Option<&Client> {
         self.monitors.iter()
             .find_map(|x| x.client(window))
     }
 
+    /// get a mutable reference to a client based on its window
     fn client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
         self.monitors.iter_mut()
             .find_map(|x| x.client_mut(window))
     }
 
+    /// cleans up all completed child processes
     fn reap() -> Result<bool, Error> {
         let mut zombie = false;
 
