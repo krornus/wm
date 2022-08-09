@@ -2,13 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::Error;
+use crate::rect::Rect;
 use crate::kb::KeyManager;
 use crate::tag::TagManager;
-use crate::monitor::MonitorManager;
-use crate::container::Container;
+use crate::monitor::Display;
 use crate::client::Client;
 
 
+use fork::Fork;
 use xcb::x::{self, Keycode};
 use signal_hook::consts::signal::*;
 
@@ -55,7 +56,7 @@ pub struct WindowManager<T> {
     signal: Arc<AtomicUsize>,
     tags: TagManager,
     keys: KeyManager<T>,
-    monitors: MonitorManager,
+    display: Display,
 }
 
 impl<T: Copy> WindowManager<T> {
@@ -81,15 +82,15 @@ impl<T: Copy> WindowManager<T> {
         }).map_err(|_| Error::AlreadyRunning)?;
 
         let tags = TagManager::new();
-        let keys = KeyManager::new(&conn)?;
-        let monitors = MonitorManager::new(&conn, root)?;
+        let keys = KeyManager::new(&conn, root)?;
+        let display = Display::new(&conn, root)?;
 
         let wm = WindowManager {
-            keys: keys,
-            monitors: monitors,
-            tags: tags,
             signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn),
+            keys: keys,
+            tags: tags,
+            display: display,
         };
 
         Ok(wm)
@@ -120,6 +121,7 @@ impl<T: Copy> WindowManager<T> {
             }
         }
     }
+
 }
 
 
@@ -140,11 +142,16 @@ impl<T: Copy> WindowManager<T> {
             _ => {}
         }
 
+        // println!("event: {:?}", event);
+
         match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let value = self.keys.get(e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
-            }
+            },
+            xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
+                self.configure(e)
+            },
             xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => {
                 self.map(e)
             },
@@ -160,18 +167,93 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
+    pub fn spawn(&self, cmd: &str) {
+        /* xcb opens its descriptors with CLOEXEC */
+        if let Some(args) = shlex::split(cmd) {
+            if let Ok(Fork::Child) = fork::fork() {
+                fork::setsid().expect("setsid failed");
+
+                println!("{:?}", args);
+
+                /* swap to const pointers. into_raw() can leak here
+                 * because we will execvp() or unreachable!() */
+                let cs: Vec<_> = args.into_iter().map(|x| {
+                    std::ffi::CString::new(x)
+                        .expect("spawn: invalid arguments")
+                        .into_raw()
+                }).collect();
+
+                unsafe {
+                    libc::execvp(cs[0], (&cs[..]).as_ptr() as *const *const i8);
+                }
+
+                eprintln!("failed to spawn process");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// handle a ConfigureRequestEvent, which is a request to configure a window's properties
+    fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<Event<T>, Error> {
+        let mask = event.value_mask();
+        let mut values = Vec::with_capacity(7);
+
+        if mask.contains(xcb::x::ConfigWindowMask::X) {
+            values.push(x::ConfigWindow::X(event.x() as i32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::Y) {
+            values.push(x::ConfigWindow::Y(event.y() as i32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::WIDTH) {
+            values.push(x::ConfigWindow::Width(event.width() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::HEIGHT) {
+            values.push(x::ConfigWindow::Height(event.height() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::BORDER_WIDTH) {
+            values.push(x::ConfigWindow::BorderWidth(event.border_width() as u32));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::SIBLING) {
+            values.push(x::ConfigWindow::Sibling(event.sibling()));
+        }
+
+        if mask.contains(xcb::x::ConfigWindowMask::STACK_MODE) {
+            values.push(x::ConfigWindow::StackMode(event.stack_mode()));
+        }
+
+        /* TODO: mask checking is breaking */
+        let rect = Rect::new(event.x(), event.y(), event.width(), event.height());
+
+        println!("configure new window: {:?} - {}", event.window(), rect);
+        self.display.client(event.window(), rect)?;
+
+        self.adapter.conn.send_and_check_request(&x::ConfigureWindow {
+            window: event.window(),
+            value_list: values.as_slice(),
+        })?;
+
+        Ok(Event::Empty)
+    }
+
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
+        println!("map window: {:?}", e.window());
+        self.display.client(e.window(), Rect::new(0, 0, 0, 0))?;
         Ok(Event::Empty)
     }
 
     /// handle the UnmapNotifyEvent, which notifies us that a window has been unmapped (hidden)
-    fn unmap(&mut self, e: &x::UnmapNotifyEvent) -> Result<Event<T>, Error> {
+    fn unmap(&mut self, _: &x::UnmapNotifyEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
     }
 
     /// handle the DestroyNotify, which notifies us that a window has been destroyed
-    fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
+    fn destroy(&mut self, _: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
     }
 }

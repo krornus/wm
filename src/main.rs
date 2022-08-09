@@ -2,6 +2,7 @@
 mod wm;
 mod kb;
 mod tag;
+mod tree;
 mod client;
 mod monitor;
 mod container;
@@ -14,7 +15,18 @@ enum Event {
 
 }
 
+fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
+    wm.spawn("xterm /bin/zsh");
+
+    loop {
+        wm.next()?;
+    }
+
+}
+
 fn main() {
-    let mut conn = wm::WindowManager::<Event>::connect(None)
+    let mut wm = wm::WindowManager::<Event>::connect(None)
         .expect("failed to connect to X11 server");
+
+    run(&mut wm).expect("window manager error");
 }

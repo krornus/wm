@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Point {
     pub x: i16,
@@ -128,24 +130,24 @@ impl Rect {
 
     pub fn cut(&self, at: Cut) -> (Rect, Rect) {
         match at {
-            Cut::Horizontal(n) => {
-                if n > self.w || n > i16::MAX as u16 {
-                    panic!("Rect::cut: index out of range");
-                }
-
-                (
-                    Rect::new(self.x, self.y, n, self.h),
-                    Rect::new(self.x + n as i16, self.y, self.w - n, self.h)
-                )
-            },
-            Cut::Vertical(n) => {
+            Cut::Horizontal(mut n) => {
                 if n > self.h || n > i16::MAX as u16 {
-                    panic!("Rect::cut: index out of range");
+                    n = self.h;
                 }
 
                 (
                     Rect::new(self.x, self.y, self.w, n),
                     Rect::new(self.x, self.y + n as i16, self.w, self.h - n)
+                )
+            },
+            Cut::Vertical(mut n) => {
+                if n > self.w || n > i16::MAX as u16 {
+                    n = self.w;
+                }
+
+                (
+                    Rect::new(self.x, self.y, n, self.h),
+                    Rect::new(self.x + n as i16, self.y, self.w - n, self.h)
                 )
             }
         }
@@ -312,6 +314,19 @@ impl <'a> Iterator for SplitIterator<'a> {
             SplitIterator::Vertical(v) => v.next(),
             SplitIterator::Horizontal(h) => h.next(),
         }
+    }
+}
+
+
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}x{}", self.x, self.y)
+    }
+}
+
+impl fmt::Display for Rect {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}x{}+{}+{}", self.w, self.h, self.x, self.y)
     }
 }
 

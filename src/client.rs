@@ -5,14 +5,62 @@ use crate::wm::Adapter;
 use xcb::x;
 
 pub struct Client {
-    pub window: x::Window,
-    pub visible: bool,
-    pub focus: bool,
-    pub index: TagIndex,
-    pub rect: Rect,
+    window: x::Window,
+    visible: bool,
+    focus: bool,
+    index: TagIndex,
+    rect: Rect,
 }
 
 impl Client {
+    #[inline]
+    pub fn window(&self) -> x::Window {
+        self.window
+    }
+
+    #[inline]
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    #[inline]
+    pub fn index(&self) -> &TagIndex {
+        &self.index
+    }
+
+    #[inline]
+    pub fn rect(&self) -> &Rect {
+        &self.rect
+    }
+}
+
+impl Client {
+    pub fn new(window: x::Window, rect: Rect) -> Self {
+        Client {
+            window: window,
+            visible: false,
+            focus: false,
+            index: TagIndex::new(),
+            rect: rect,
+        }
+    }
+
+    pub fn show(&mut self, adapter: &mut Adapter, visible: bool) {
+        if self.visible != visible {
+            self.visible = visible;
+
+            if visible {
+                adapter.request(&x::MapWindow {
+                    window: self.window,
+                });
+            } else {
+                adapter.request(&x::UnmapWindow {
+                    window: self.window,
+                });
+            }
+        }
+    }
+
     pub fn focus(&mut self, p: bool) {
         if self.focus != p {
             /* TODO: actually grab/release focus */

@@ -1,4 +1,4 @@
-use crate::rect::{Rect, Cut, Split};
+use crate::rect::{Cut, Split};
 use crate::container::Container;
 use crate::wm::Adapter;
 
@@ -15,7 +15,7 @@ pub struct LeftMaster {
 
 impl Layout for LeftMaster {
     fn arrange(&mut self, adapter: &mut Adapter, container: &mut Container) {
-        let scope: Rect = container.rect;
+        let scope = *container.rect();
         let mut clients = container.clients_mut(false);
         let mut count = clients.len();
         let mut index = 0;

@@ -5,6 +5,12 @@ pub struct TagIndex {
 
 }
 
+impl TagIndex {
+    pub fn new() -> Self {
+        TagIndex { }
+    }
+}
+
 pub struct TagManager {
 
 }

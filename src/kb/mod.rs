@@ -115,15 +115,7 @@ pub struct KeyManager<T> {
 
 impl<T: Copy> KeyManager<T> {
     /* TODO: support refreshing mappings */
-    pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
-        let setup = conn.get_setup();
-        let screen = setup
-            .roots()
-            .next()
-            .ok_or(Error::MissingScreen)?;
-
-        let root = screen.root();
-
+    pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
         let mut keymap = KeyMap::new(conn)?;
 
         let num_lock = keymap.mask(keysym::Num_Lock)?;
@@ -182,9 +174,7 @@ impl<T: Copy> KeyManager<T> {
     }
 
     pub fn get(&self, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
-        println!("get: [{:?} + {:?}]", m, k);
         m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
-        println!("  -> [{:?} + {:?}]", m, k);
         self.bindings.get(&(m, k)).copied()
     }
 }
