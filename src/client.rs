@@ -1,5 +1,4 @@
 use crate::rect::Rect;
-use crate::tag::TagIndex;
 use crate::wm::Adapter;
 
 use xcb::x;
@@ -8,7 +7,6 @@ pub struct Client {
     window: x::Window,
     visible: bool,
     focus: bool,
-    index: TagIndex,
     rect: Rect,
 }
 
@@ -24,11 +22,6 @@ impl Client {
     }
 
     #[inline]
-    pub fn index(&self) -> &TagIndex {
-        &self.index
-    }
-
-    #[inline]
     pub fn rect(&self) -> &Rect {
         &self.rect
     }
@@ -40,7 +33,6 @@ impl Client {
             window: window,
             visible: false,
             focus: false,
-            index: TagIndex::new(),
             rect: rect,
         }
     }
@@ -68,9 +60,9 @@ impl Client {
         }
     }
 
-    pub fn resize(&mut self, adapter: &mut Adapter, rect: Rect) {
-        if self.rect != rect {
-            self.rect = rect;
+    pub fn resize(&mut self, adapter: &mut Adapter, rect: &Rect) {
+        if &self.rect != rect {
+            self.rect = *rect;
 
             adapter.request(&x::ConfigureWindow {
                 window: self.window,

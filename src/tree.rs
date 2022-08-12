@@ -1,9 +1,7 @@
 /// Inspired by crate tree_slab, which is no longer being updated.
-use std::fmt;
-
 use crate::slab::{Slab, SlabIndex};
 
-pub struct Node<T> {
+pub struct TreeNode<T> {
     pub value: T,
     parent: Option<SlabIndex>,
     left: Option<SlabIndex>,
@@ -11,9 +9,9 @@ pub struct Node<T> {
     child: Option<SlabIndex>,
 }
 
-impl<T> Node<T> {
+impl<T> TreeNode<T> {
     fn new(value: T) -> Self {
-        Node {
+        TreeNode {
             value: value,
             parent: None,
             left: None,
@@ -25,14 +23,14 @@ impl<T> Node<T> {
 
 pub struct Tree<T> {
     root: SlabIndex,
-    slab: Slab<Node<T>>,
+    slab: Slab<TreeNode<T>>,
 }
 
 impl<T> Tree<T> {
     pub fn new(value: T) -> Self {
         let mut slab = Slab::new();
 
-        let node = Node::new(value);
+        let node = TreeNode::new(value);
         let index = slab.insert(node);
 
         Tree {
@@ -47,7 +45,7 @@ impl<T> Tree<T> {
 
     pub fn insert(&mut self, index: &SlabIndex, value: T) -> Option<SlabIndex> {
         let insert_index = self.slab.vacant_key();
-        let mut node = Node::new(value);
+        let mut node = TreeNode::new(value);
 
         /* set the parent index in the new child */
         let parent = self.get_mut(index)?;
@@ -73,11 +71,12 @@ impl<T> Tree<T> {
     }
 
     #[inline]
-    pub fn get(&self, index: &SlabIndex) -> Option<&Node<T>> {
+    pub fn get(&self, index: &SlabIndex) -> Option<&TreeNode<T>> {
         self.slab.get(index)
     }
 
-    pub fn get_mut(&mut self, index: &SlabIndex) -> Option<&mut Node<T>> {
+    #[inline]
+    pub fn get_mut(&mut self, index: &SlabIndex) -> Option<&mut TreeNode<T>> {
         self.slab.get_mut(index)
     }
 

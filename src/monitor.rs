@@ -1,16 +1,14 @@
-use crate::wm::Adapter;
-use crate::rect::{Rect, Cut};
-use crate::client::Client;
+use crate::rect::Rect;
 use crate::error::Error;
 // use crate::container::{Container, ContainerID};
 
 use xcb::{x, randr};
 
 pub struct Monitor {
-    pub root: x::Window,
-    pub name: String,
-    pub primary: bool,
-    pub rect: Rect,
+    root: x::Window,
+    name: String,
+    primary: bool,
+    rect: Rect,
 }
 
 impl Monitor {
@@ -33,20 +31,7 @@ impl Monitor {
         })
     }
 
-    pub fn rect(&self) -> &Rect {
-        &self.rect
-    }
-}
-
-pub struct MonitorList {
-    root: x::Window,
-    monitors: Vec<Monitor>,
-    primary: Option<usize>,
-    active: Option<usize>,
-}
-
-impl MonitorList {
-    fn get_monitors(conn: &xcb::Connection, root: x::Window) -> Result<(Vec<Monitor>, Option<usize>), Error> {
+    pub fn open(conn: &xcb::Connection, root: x::Window) -> Result<(Vec<Monitor>, Option<usize>), Error> {
         let cookie = conn.send_request(&randr::GetMonitors {
             window: root,
             get_active: true,
@@ -91,132 +76,7 @@ impl MonitorList {
         Ok((monitors, primary))
     }
 
-    pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
-        let (monitors, primary) = Self::get_monitors(conn, root)?;
-
-        let active = if monitors.len() > 0 {
-            Some(0)
-        } else {
-            None
-        };
-
-        /* TODO: unsure if all flags are necessary. SCREEN_CHANGE is the only one
-         * we need to watch in order to call update() */
-        conn.send_and_check_request(&randr::SelectInput {
-            window: root,
-            enable: randr::NotifyMask::SCREEN_CHANGE |
-                    randr::NotifyMask::OUTPUT_CHANGE |
-                    randr::NotifyMask::CRTC_CHANGE |
-                    randr::NotifyMask::OUTPUT_PROPERTY
-        })?;
-
-        Ok(MonitorList {
-            root: root,
-            active: active,
-            primary: primary,
-            monitors: monitors
-        })
-    }
-
-    pub fn update(&mut self, adapter: &mut Adapter) -> Result<(), Error> {
-        let name = self.active.map(|i| String::from(&self.monitors[i].name));
-
-        let (monitors, primary) = Self::get_monitors(&adapter.conn, self.root)?;
-
-        self.monitors = monitors;
-        self.primary = primary;
-
-        let mut active = name.and_then(
-            |n| self.monitors.iter().position(|m| m.name == n)
-        );
-
-        if active.is_none() && self.monitors.len() > 0 {
-            active = Some(0);
-        }
-
-        self.active = active;
-
-        Ok(())
-    }
-
-    #[inline]
-    pub fn primary(&self) -> Option<&Monitor> {
-        self.primary.map(|x| &self.monitors[x])
-    }
-
-    #[inline]
-    fn index(&self) -> Option<usize> {
-        self.active.or(self.primary)
-    }
-
-    #[inline]
-    pub fn active(&self) -> Option<&Monitor> {
-        self.index().map(|x| &self.monitors[x])
-    }
-
-    #[inline]
-    pub fn iter(&self) -> std::slice::Iter<Monitor> {
-        self.monitors.iter()
+    pub fn rect(&self) -> &Rect {
+        &self.rect
     }
 }
-
-// pub struct Display {
-//     root: Container,
-//     monitors: MonitorList,
-//     bars: Vec<ContainerID>,
-//     outputs: Vec<ContainerID>,
-// }
-
-// impl Display {
-//     pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
-//         let monitors = MonitorList::new(&conn, root)?;
-//         let mut root = Container::new(Rect::new(0, 0, 0, 0,));
-
-//         let mut bars = Vec::with_capacity(monitors.monitors.len());
-//         let mut outputs = Vec::with_capacity(monitors.monitors.len());
-
-//         for mon in monitors.iter() {
-//             let con = root.scope(*mon.rect());
-//             let (bar, win) = con.rect().cut(Cut::Horizontal(20));
-
-//             println!("monitor: {}", mon.rect);
-//             println!("  bar: {}", bar);
-//             println!("  scope: {}", win);
-
-//             bars.push(con.scope(bar).id());
-//             outputs.push(con.scope(win).id());
-//         }
-
-//         Ok(Display {
-//             root: root,
-//             monitors: monitors,
-//             bars: bars,
-//             outputs: outputs
-//         })
-//     }
-
-//     pub fn primary(&self) -> ContainerID {
-//         self.monitors.primary
-//             .map(|i| self.outputs[i])
-//             .unwrap_or(self.root.id())
-//     }
-
-//     pub fn active(&self) -> ContainerID {
-//         self.monitors.index()
-//             .map(|i| self.outputs[i])
-//             .unwrap_or(self.root.id())
-//     }
-
-//     pub fn client(&mut self, window: x::Window, rect: Rect) -> Result<(), Error> {
-//         match self.root.by_window(window) {
-//             Some(_) => {
-//                 Ok(())
-//             },
-//             None => {
-//                 let id = self.active();
-//                 self.root.add(id, window, rect)?;
-//                 Ok(())
-//             }
-//         }
-//     }
-// }

@@ -2,16 +2,44 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::Error;
-use crate::rect::Rect;
+use crate::rect::Cut;
 use crate::kb::KeyManager;
-use crate::tag::TagManager;
-// use crate::monitor::Display;
+use crate::tag::Tags;
 use crate::client::Client;
-
+use crate::monitor::Monitor;
+use crate::container::{Scope, Container, ContainerId};
 
 use fork::Fork;
 use xcb::x::{self, Keycode};
 use signal_hook::consts::signal::*;
+
+pub struct Display {
+    monitor: Monitor,
+    container: Container,
+    bar: ContainerId,
+    window: ContainerId,
+}
+
+impl Display {
+    fn new(monitor: Monitor) -> Self {
+        let mut container = Container::new(*monitor.rect());
+        let (top, bottom) = monitor.rect().cut(Cut::Horizontal(25));
+
+        let root = container.root();
+
+        let bar = container.insert(&root, Scope::new(top)).unwrap();
+        let window = container.insert(&root, Scope::new(bottom)).unwrap();
+
+        Display {
+            monitor: monitor,
+            container: container,
+            bar: bar,
+            window: window,
+        }
+    }
+
+
+}
 
 pub struct Adapter {
     pub conn: xcb::Connection,
@@ -54,9 +82,9 @@ pub enum Event<'w, T> {
 pub struct WindowManager<T> {
     adapter: Adapter,
     signal: Arc<AtomicUsize>,
-    tags: TagManager,
+    tags: Tags,
     keys: KeyManager<T>,
-    // display: Display,
+    displays: Vec<Display>,
 }
 
 impl<T: Copy> WindowManager<T> {
@@ -81,16 +109,21 @@ impl<T: Copy> WindowManager<T> {
             )],
         }).map_err(|_| Error::AlreadyRunning)?;
 
-        let tags = TagManager::new();
+        let tags = Tags::new();
         let keys = KeyManager::new(&conn, root)?;
-        // let display = Display::new(&conn, root)?;
+
+        let (monitors, _) = Monitor::open(&conn, root)?;
+
+        let displays = monitors.into_iter()
+            .map(|m| Display::new(m))
+            .collect();
 
         let wm = WindowManager {
             signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn),
             keys: keys,
             tags: tags,
-            // display: display,
+            displays: displays,
         };
 
         Ok(wm)
@@ -226,11 +259,6 @@ impl<T: Copy> WindowManager<T> {
             values.push(x::ConfigWindow::StackMode(event.stack_mode()));
         }
 
-        /* TODO: mask checking is breaking */
-        let rect = Rect::new(event.x(), event.y(), event.width(), event.height());
-
-        // self.display.client(event.window(), rect)?;
-
         self.adapter.conn.send_and_check_request(&x::ConfigureWindow {
             window: event.window(),
             value_list: values.as_slice(),
@@ -240,9 +268,7 @@ impl<T: Copy> WindowManager<T> {
     }
 
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
-    fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
-        println!("map window: {:?}", e.window());
-        // self.display.client(e.window(), Rect::new(0, 0, 0, 0))?;
+    fn map(&mut self, _: &x::MapRequestEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
     }
 

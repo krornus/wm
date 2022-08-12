@@ -1,22 +1,12 @@
 pub enum Tag {
 }
 
-pub struct TagIndex {
+pub struct Tags {
 
 }
 
-impl TagIndex {
+impl Tags {
     pub fn new() -> Self {
-        TagIndex { }
-    }
-}
-
-pub struct TagManager {
-
-}
-
-impl TagManager {
-    pub fn new() -> Self {
-        TagManager { }
+        Tags { }
     }
 }
