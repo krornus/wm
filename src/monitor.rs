@@ -2,7 +2,7 @@ use crate::wm::Adapter;
 use crate::rect::{Rect, Cut};
 use crate::client::Client;
 use crate::error::Error;
-use crate::container::{Container, ContainerID};
+// use crate::container::{Container, ContainerID};
 
 use xcb::{x, randr};
 
@@ -160,63 +160,63 @@ impl MonitorList {
     }
 }
 
-pub struct Display {
-    root: Container,
-    monitors: MonitorList,
-    bars: Vec<ContainerID>,
-    outputs: Vec<ContainerID>,
-}
+// pub struct Display {
+//     root: Container,
+//     monitors: MonitorList,
+//     bars: Vec<ContainerID>,
+//     outputs: Vec<ContainerID>,
+// }
 
-impl Display {
-    pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
-        let monitors = MonitorList::new(&conn, root)?;
-        let mut root = Container::new(Rect::new(0, 0, 0, 0,));
+// impl Display {
+//     pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
+//         let monitors = MonitorList::new(&conn, root)?;
+//         let mut root = Container::new(Rect::new(0, 0, 0, 0,));
 
-        let mut bars = Vec::with_capacity(monitors.monitors.len());
-        let mut outputs = Vec::with_capacity(monitors.monitors.len());
+//         let mut bars = Vec::with_capacity(monitors.monitors.len());
+//         let mut outputs = Vec::with_capacity(monitors.monitors.len());
 
-        for mon in monitors.iter() {
-            let con = root.scope(*mon.rect());
-            let (bar, win) = con.rect().cut(Cut::Horizontal(20));
+//         for mon in monitors.iter() {
+//             let con = root.scope(*mon.rect());
+//             let (bar, win) = con.rect().cut(Cut::Horizontal(20));
 
-            println!("monitor: {}", mon.rect);
-            println!("  bar: {}", bar);
-            println!("  scope: {}", win);
+//             println!("monitor: {}", mon.rect);
+//             println!("  bar: {}", bar);
+//             println!("  scope: {}", win);
 
-            bars.push(con.scope(bar).id());
-            outputs.push(con.scope(win).id());
-        }
+//             bars.push(con.scope(bar).id());
+//             outputs.push(con.scope(win).id());
+//         }
 
-        Ok(Display {
-            root: root,
-            monitors: monitors,
-            bars: bars,
-            outputs: outputs
-        })
-    }
+//         Ok(Display {
+//             root: root,
+//             monitors: monitors,
+//             bars: bars,
+//             outputs: outputs
+//         })
+//     }
 
-    pub fn primary(&self) -> ContainerID {
-        self.monitors.primary
-            .map(|i| self.outputs[i])
-            .unwrap_or(self.root.id())
-    }
+//     pub fn primary(&self) -> ContainerID {
+//         self.monitors.primary
+//             .map(|i| self.outputs[i])
+//             .unwrap_or(self.root.id())
+//     }
 
-    pub fn active(&self) -> ContainerID {
-        self.monitors.index()
-            .map(|i| self.outputs[i])
-            .unwrap_or(self.root.id())
-    }
+//     pub fn active(&self) -> ContainerID {
+//         self.monitors.index()
+//             .map(|i| self.outputs[i])
+//             .unwrap_or(self.root.id())
+//     }
 
-    pub fn client(&mut self, window: x::Window, rect: Rect) -> Result<(), Error> {
-        match self.root.by_window(window) {
-            Some(_) => {
-                Ok(())
-            },
-            None => {
-                let id = self.active();
-                self.root.add(id, window, rect)?;
-                Ok(())
-            }
-        }
-    }
-}
+//     pub fn client(&mut self, window: x::Window, rect: Rect) -> Result<(), Error> {
+//         match self.root.by_window(window) {
+//             Some(_) => {
+//                 Ok(())
+//             },
+//             None => {
+//                 let id = self.active();
+//                 self.root.add(id, window, rect)?;
+//                 Ok(())
+//             }
+//         }
+//     }
+// }

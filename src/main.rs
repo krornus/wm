@@ -2,6 +2,7 @@
 mod wm;
 mod kb;
 mod tag;
+mod slab;
 mod tree;
 mod client;
 mod monitor;

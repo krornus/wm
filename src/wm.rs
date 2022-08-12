@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::rect::Rect;
 use crate::kb::KeyManager;
 use crate::tag::TagManager;
-use crate::monitor::Display;
+// use crate::monitor::Display;
 use crate::client::Client;
 
 
@@ -56,7 +56,7 @@ pub struct WindowManager<T> {
     signal: Arc<AtomicUsize>,
     tags: TagManager,
     keys: KeyManager<T>,
-    display: Display,
+    // display: Display,
 }
 
 impl<T: Copy> WindowManager<T> {
@@ -83,14 +83,14 @@ impl<T: Copy> WindowManager<T> {
 
         let tags = TagManager::new();
         let keys = KeyManager::new(&conn, root)?;
-        let display = Display::new(&conn, root)?;
+        // let display = Display::new(&conn, root)?;
 
         let wm = WindowManager {
             signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn),
             keys: keys,
             tags: tags,
-            display: display,
+            // display: display,
         };
 
         Ok(wm)
@@ -229,8 +229,7 @@ impl<T: Copy> WindowManager<T> {
         /* TODO: mask checking is breaking */
         let rect = Rect::new(event.x(), event.y(), event.width(), event.height());
 
-        println!("configure new window: {:?} - {}", event.window(), rect);
-        self.display.client(event.window(), rect)?;
+        // self.display.client(event.window(), rect)?;
 
         self.adapter.conn.send_and_check_request(&x::ConfigureWindow {
             window: event.window(),
@@ -243,7 +242,7 @@ impl<T: Copy> WindowManager<T> {
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
         println!("map window: {:?}", e.window());
-        self.display.client(e.window(), Rect::new(0, 0, 0, 0))?;
+        // self.display.client(e.window(), Rect::new(0, 0, 0, 0))?;
         Ok(Event::Empty)
     }
 

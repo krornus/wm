@@ -5,11 +5,11 @@ authors = ["Spencer Powell <krornus@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-clap = { version = "3.0.12", features = ["derive"] }
-xcb = { version = "1.1.1", features = ["randr"] }
+clap = { version = "3.0", features = ["derive"] }
+xcb = { version = "1.1", features = ["randr"] }
 thiserror = "1.0"
-signal-hook = "0.3.13"
+signal-hook = "0.3"
 libc = "0.2"
-fork = "0.1.19"
-shlex = "1.1.0"
-slab = "0.4.7"
+fork = "0.1"
+shlex = "1.1"
+slab = "0.4"

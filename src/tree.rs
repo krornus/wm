@@ -1,27 +1,20 @@
 /// Inspired by crate tree_slab, which is no longer being updated.
-use slab::Slab;
+use std::fmt;
 
-/// Generational index into the slab
-#[derive(Debug, Clone)]
-struct TreeIndex {
-    key: usize,
-    generation: usize,
-}
+use crate::slab::{Slab, SlabIndex};
 
-struct Node<T> {
+pub struct Node<T> {
     pub value: T,
-    generation: usize,
-    parent: Option<TreeIndex>,
-    left: Option<TreeIndex>,
-    right: Option<TreeIndex>,
-    child: Option<TreeIndex>,
+    parent: Option<SlabIndex>,
+    left: Option<SlabIndex>,
+    right: Option<SlabIndex>,
+    child: Option<SlabIndex>,
 }
 
 impl<T> Node<T> {
-    fn new(value: T, generation: usize) -> Self {
+    fn new(value: T) -> Self {
         Node {
             value: value,
-            generation: generation,
             parent: None,
             left: None,
             right: None,
@@ -30,43 +23,31 @@ impl<T> Node<T> {
     }
 }
 
-struct Tree<T> {
-    root: TreeIndex,
+pub struct Tree<T> {
+    root: SlabIndex,
     slab: Slab<Node<T>>,
-    generation: usize,
 }
 
 impl<T> Tree<T> {
-    fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         let mut slab = Slab::new();
-        let node = Node::new(value, 0);
-        let key = TreeIndex { key: slab.insert(node), generation: 0 };
+
+        let node = Node::new(value);
+        let index = slab.insert(node);
 
         Tree {
-            root: key,
+            root: index,
             slab: slab,
-            generation: 0,
         }
     }
 
-    fn node(&self, value: T) -> Node<T> {
-        Node::new(value, self.generation)
+    pub fn root(&self) -> SlabIndex {
+        self.root
     }
 
-    fn index(&self) -> TreeIndex {
-        TreeIndex { key: self.slab.vacant_key(), generation: self.generation }
-    }
-
-    pub fn root(&mut self, value: T) -> TreeIndex {
-        let node = self.node(value);
-        let key = self.slab.insert(node);
-
-        TreeIndex { key: key, generation: self.generation }
-    }
-
-    pub fn insert(&mut self, index: &TreeIndex, value: T) -> Option<TreeIndex> {
-        let insert_index = self.index();
-        let mut node = self.node(value);
+    pub fn insert(&mut self, index: &SlabIndex, value: T) -> Option<SlabIndex> {
+        let insert_index = self.slab.vacant_key();
+        let mut node = Node::new(value);
 
         /* set the parent index in the new child */
         let parent = self.get_mut(index)?;
@@ -88,65 +69,85 @@ impl<T> Tree<T> {
 
         node.right = child_index;
 
-        let key = self.slab.insert(node);
-        Some(TreeIndex { key: key, generation: self.generation })
+        Some(self.slab.insert(node))
     }
 
-    pub fn get(&self, index: &TreeIndex) -> Option<&Node<T>> {
-        self.slab.get(index.key).and_then(|node|
-            if index.generation == node.generation {
-                Some(node)
-            } else {
-                None
-            })
+    #[inline]
+    pub fn get(&self, index: &SlabIndex) -> Option<&Node<T>> {
+        self.slab.get(index)
     }
 
-    pub fn get_mut(&mut self, index: &TreeIndex) -> Option<&mut Node<T>> {
-        self.slab.get_mut(index.key).and_then(|node|
-            if index.generation == node.generation {
-                Some(node)
-            } else {
-                None
-            })
+    pub fn get_mut(&mut self, index: &SlabIndex) -> Option<&mut Node<T>> {
+        self.slab.get_mut(index)
     }
 
-    pub fn remove(&mut self, index: &TreeIndex) -> Option<T> {
-        let generation = self.slab.get(index.key)
-            .map(|node| node.generation);
+    pub fn discard(&mut self, index: &SlabIndex) {
+        let indices: Vec<_> = self.iter(index)
+            .copied()
+            .collect();
 
-        if generation == Some(index.generation) {
-            self.generation += 1;
-            let node = self.slab.remove(index.key);
-            Some(node.value)
-        } else {
-            None
+        for i in indices {
+            self.slab.remove(&i);
         }
+    }
+
+    fn take(&mut self, other: &mut Tree<T>, from: &SlabIndex, to: &SlabIndex) {
+        /* not the fastest way to do this, but the easiest to read */
+        let children: Vec<_> = other.children(from).copied().collect();
+        let node = other.slab.remove(from);
+        let index = self.insert(to, node.value)
+            .expect("corrupted tree");
+
+        for child in children.into_iter().rev() {
+            self.take(other, &child, &index);
+        }
+    }
+
+    pub fn remove(&mut self, index: &SlabIndex) -> Option<Tree<T>> {
+        let children: Vec<_> = self.children(index).copied().collect();
+
+        let root = self.slab.try_remove(index)?;
+        let mut tree = Tree::new(root.value);
+
+        for child in children.into_iter().rev() {
+            tree.take(self, &child, &tree.root.clone());
+        }
+
+        Some(tree)
     }
 }
 
 impl<T> Tree<T> {
-    fn children<'a>(&'a self, index: &'a TreeIndex) -> Children<'a, T> {
+    pub fn children<'a>(&'a self, index: &'a SlabIndex) -> Children<'a, T> {
+        let child = self.get(index).and_then(|x| x.child.as_ref());
+
         Children {
             tree: self,
-            index: Some(index),
+            index: child,
         }
     }
 
-    fn iter<'a>(&'a self, index: &'a TreeIndex) -> Iter<'a, T> {
-        Iter {
-            tree: self,
-            stack: vec![index]
+    pub fn iter<'a>(&'a self, index: &'a SlabIndex) -> Iter<'a, T> {
+        match self.get(index) {
+            Some(_) => Iter {
+                tree: self,
+                stack: vec![index]
+            },
+            None => Iter {
+                tree: self,
+                stack: vec![],
+            }
         }
     }
 }
 
-struct Children<'a, T> {
+pub struct Children<'a, T> {
     tree: &'a Tree<T>,
-    index: Option<&'a TreeIndex>,
+    index: Option<&'a SlabIndex>,
 }
 
 impl<'a, T> Iterator for Children<'a, T> {
-    type Item = &'a TreeIndex;
+    type Item = &'a SlabIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
         let index = self.index?;
@@ -157,13 +158,13 @@ impl<'a, T> Iterator for Children<'a, T> {
     }
 }
 
-struct Iter<'a, T> {
+pub struct Iter<'a, T> {
     tree: &'a Tree<T>,
-    stack: Vec<&'a TreeIndex>,
+    stack: Vec<&'a SlabIndex>,
 }
 
 impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = &'a TreeIndex;
+    type Item = &'a SlabIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
         let index = self.stack.pop()?;
@@ -171,5 +172,49 @@ impl<'a, T> Iterator for Iter<'a, T> {
         self.stack.extend(self.tree.children(index));
 
         Some(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn children<T: Copy>(tree: &Tree<T>, index: &SlabIndex) -> Vec<T> {
+        let i: Vec<_> = tree.children(index).copied().collect();
+        i.into_iter().map(|i| tree.get(&i).unwrap().value).collect()
+    }
+
+    fn iter<T: Copy>(tree: &Tree<T>, index: &SlabIndex) -> Vec<T> {
+        let i: Vec<_> = tree.iter(index).copied().collect();
+        i.into_iter().map(|i| tree.get(&i).unwrap().value).collect()
+    }
+
+    #[test]
+    fn test_tree() {
+        let mut tree = Tree::new(1);
+
+        let two = tree.insert(&tree.root(), 2).unwrap();
+        tree.insert(&two, 3).unwrap();
+        let four = tree.insert(&two, 4).unwrap();
+
+        tree.insert(&four, 5).unwrap();
+        tree.insert(&four, 6).unwrap();
+        tree.insert(&four, 7).unwrap();
+
+
+        tree.insert(&tree.root(), 8).unwrap();
+
+        assert_eq!(children(&tree, &tree.root()), vec![8, 2]);
+        assert_eq!(children(&tree, &two), vec![4, 3]);
+        assert_eq!(children(&tree, &four), vec![7, 6, 5]);
+        assert_eq!(iter(&tree, &tree.root), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        dbg!(tree.root());
+        dbg!(two);
+        dbg!(four);
+
+        let new = tree.remove(&two).unwrap();
+        assert_eq!(iter(&tree, &tree.root), vec![1, 8]);
+        assert_eq!(iter(&new, &new.root), vec![2, 3, 4, 5, 6, 7]);
     }
 }
