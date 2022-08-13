@@ -5,7 +5,7 @@ mod tag;
 mod slab;
 mod tree;
 mod client;
-mod monitor;
+mod display;
 mod container;
 mod layout;
 mod rect;
@@ -17,6 +17,12 @@ enum Event {
 }
 
 fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
+    wm.spawn("xterm /bin/zsh");
+    wm.spawn("xterm /bin/zsh");
+    wm.spawn("xterm /bin/zsh");
+    wm.spawn("xterm /bin/zsh");
+    wm.spawn("xterm /bin/zsh");
+    wm.spawn("xterm /bin/zsh");
     wm.spawn("xterm /bin/zsh");
 
     loop {

@@ -2,44 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::Error;
-use crate::rect::Cut;
+use crate::rect::Rect;
 use crate::kb::KeyManager;
 use crate::tag::Tags;
 use crate::client::Client;
-use crate::monitor::Monitor;
-use crate::container::{Scope, Container, ContainerId};
+use crate::display::Display;
 
 use fork::Fork;
 use xcb::x::{self, Keycode};
 use signal_hook::consts::signal::*;
-
-pub struct Display {
-    monitor: Monitor,
-    container: Container,
-    bar: ContainerId,
-    window: ContainerId,
-}
-
-impl Display {
-    fn new(monitor: Monitor) -> Self {
-        let mut container = Container::new(*monitor.rect());
-        let (top, bottom) = monitor.rect().cut(Cut::Horizontal(25));
-
-        let root = container.root();
-
-        let bar = container.insert(&root, Scope::new(top)).unwrap();
-        let window = container.insert(&root, Scope::new(bottom)).unwrap();
-
-        Display {
-            monitor: monitor,
-            container: container,
-            bar: bar,
-            window: window,
-        }
-    }
-
-
-}
 
 pub struct Adapter {
     pub conn: xcb::Connection,
@@ -72,10 +43,9 @@ impl Adapter {
     }
 }
 
-pub enum Event<'w, T> {
+pub enum Event<T> {
     Empty,
     Interrupt,
-    ClientCreate(&'w mut Client),
     UserEvent(T),
 }
 
@@ -83,8 +53,8 @@ pub struct WindowManager<T> {
     adapter: Adapter,
     signal: Arc<AtomicUsize>,
     tags: Tags,
+    display: Display,
     keys: KeyManager<T>,
-    displays: Vec<Display>,
 }
 
 impl<T: Copy> WindowManager<T> {
@@ -111,19 +81,14 @@ impl<T: Copy> WindowManager<T> {
 
         let tags = Tags::new();
         let keys = KeyManager::new(&conn, root)?;
-
-        let (monitors, _) = Monitor::open(&conn, root)?;
-
-        let displays = monitors.into_iter()
-            .map(|m| Display::new(m))
-            .collect();
+        let display = Display::new(&conn, root)?;
 
         let wm = WindowManager {
             signal: Arc::new(AtomicUsize::new(0)),
             adapter: Adapter::new(conn),
+            display: display,
             keys: keys,
             tags: tags,
-            displays: displays,
         };
 
         Ok(wm)
@@ -157,7 +122,6 @@ impl<T: Copy> WindowManager<T> {
 
 }
 
-
 impl<T: Copy> WindowManager<T> {
     pub fn next(&mut self) -> Result<Event<T>, Error> {
         let event = self.adapter.conn.wait_for_event()?;
@@ -175,9 +139,7 @@ impl<T: Copy> WindowManager<T> {
             _ => {}
         }
 
-        // println!("event: {:?}", event);
-
-        match event {
+        let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let value = self.keys.get(e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
@@ -197,7 +159,11 @@ impl<T: Copy> WindowManager<T> {
             _ => {
                 Ok(Event::Empty)
             },
-        }
+        };
+
+        self.adapter.check()?;
+
+        e
     }
 
     pub fn spawn(&self, cmd: &str) {
@@ -231,20 +197,30 @@ impl<T: Copy> WindowManager<T> {
         let mask = event.value_mask();
         let mut values = Vec::with_capacity(7);
 
-        if mask.contains(xcb::x::ConfigWindowMask::X) {
-            values.push(x::ConfigWindow::X(event.x() as i32));
-        }
+        let client = self.display.get_client(event.window());
 
-        if mask.contains(xcb::x::ConfigWindowMask::Y) {
-            values.push(x::ConfigWindow::Y(event.y() as i32));
-        }
+        if let Some(c) = client {
+            let rect = c.rect();
+            values.push(x::ConfigWindow::X(rect.x as i32));
+            values.push(x::ConfigWindow::Y(rect.y as i32));
+            values.push(x::ConfigWindow::Width(rect.w as u32));
+            values.push(x::ConfigWindow::Height(rect.h as u32));
+        } else {
+            if mask.contains(xcb::x::ConfigWindowMask::X) {
+                values.push(x::ConfigWindow::X(event.x() as i32));
+            }
 
-        if mask.contains(xcb::x::ConfigWindowMask::WIDTH) {
-            values.push(x::ConfigWindow::Width(event.width() as u32));
-        }
+            if mask.contains(xcb::x::ConfigWindowMask::Y) {
+                values.push(x::ConfigWindow::Y(event.y() as i32));
+            }
 
-        if mask.contains(xcb::x::ConfigWindowMask::HEIGHT) {
-            values.push(x::ConfigWindow::Height(event.height() as u32));
+            if mask.contains(xcb::x::ConfigWindowMask::WIDTH) {
+                values.push(x::ConfigWindow::Width(event.width() as u32));
+            }
+
+            if mask.contains(xcb::x::ConfigWindowMask::HEIGHT) {
+                values.push(x::ConfigWindow::Height(event.height() as u32));
+            }
         }
 
         if mask.contains(xcb::x::ConfigWindowMask::BORDER_WIDTH) {
@@ -268,7 +244,15 @@ impl<T: Copy> WindowManager<T> {
     }
 
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
-    fn map(&mut self, _: &x::MapRequestEvent) -> Result<Event<T>, Error> {
+    fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
+        let client = Client::new(e.window(), Rect::new(0, 0, 0, 0));
+        self.display.add_client(&mut self.adapter, client);
+
+        match self.display.get_client_mut(e.window()) {
+            Some(c) => c.show(&mut self.adapter, true),
+            None => {},
+        }
+
         Ok(Event::Empty)
     }
 

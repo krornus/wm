@@ -53,6 +53,10 @@ impl Client {
         }
     }
 
+    pub fn focused(&self) -> bool {
+        self.focus
+    }
+
     pub fn focus(&mut self, p: bool) {
         if self.focus != p {
             /* TODO: actually grab/release focus */
@@ -61,6 +65,7 @@ impl Client {
     }
 
     pub fn resize(&mut self, adapter: &mut Adapter, rect: &Rect) {
+        /* TODO: split this into something to set size, and something to request if necessary */
         if &self.rect != rect {
             self.rect = *rect;
 

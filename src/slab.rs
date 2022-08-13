@@ -78,4 +78,46 @@ impl<T> Slab<T> {
             generation: self.generation,
         }
     }
+
+    pub fn iter<'a>(&'a self) -> Iter<'a, T> {
+        Iter {
+            iter: self.slab.iter(),
+        }
+    }
+
+    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+        IterMut {
+            iter: self.slab.iter_mut(),
+        }
+    }
+}
+
+pub struct Iter<'a, T> {
+    iter: slab::Iter<'a, SlabValue<T>>,
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = (SlabIndex, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.iter.next()?;
+        let i = SlabIndex { key: k, generation: v.generation };
+
+        Some((i, &v.value))
+    }
+}
+
+pub struct IterMut<'a, T> {
+    iter: slab::IterMut<'a, SlabValue<T>>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = (SlabIndex, &'a mut T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.iter.next()?;
+        let i = SlabIndex { key: k, generation: v.generation };
+
+        Some((i, &mut v.value))
+    }
 }

@@ -6,11 +6,43 @@ pub trait Layout {
     fn arrange(&mut self, adapter: &mut Adapter, scope: &Rect, clients: &mut [Client]);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct Monacle { }
+
+impl Monacle {
+    pub fn new() -> Self {
+        Monacle { }
+    }
+}
+
+impl Layout for Monacle {
+    fn arrange(&mut self, adapter: &mut Adapter, scope: &Rect, clients: &mut [Client]) {
+        for client in clients.iter_mut() {
+            if client.focused() {
+                client.resize(adapter, scope);
+                client.show(adapter, true);
+            } else {
+                client.show(adapter, false);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct LeftMaster {
     factor: f32,
     rows: usize,
     columns: usize,
+}
+
+impl LeftMaster {
+    pub fn new() -> Self {
+        LeftMaster {
+            factor: 0.5,
+            rows: 2,
+            columns: 1,
+        }
+    }
 }
 
 impl Layout for LeftMaster {
@@ -32,23 +64,16 @@ impl Layout for LeftMaster {
             let master = scope.w as f32 * self.factor;
             let (left, right) = scope.cut(Cut::Vertical(master.round() as u16));
 
-            /* calculate the number of rows in the master grid */
-            let mut rows = if self.rows < count {
-                count
-            } else {
-                self.rows
-            };
-
             /* resize master(s) */
-            for master in left.split(Split::Horizontal(rows)) {
+            for master in left.split(Split::Horizontal(self.rows)) {
                 clients[index].resize(adapter, &master);
                 index += 1;
             }
 
-            count -= rows;
+            count -= self.rows;
 
             /* calculate the number of columns in the stack */
-            let columns = if self.columns < count {
+            let columns = if count < self.columns {
                 count
             } else {
                 self.columns
@@ -56,14 +81,10 @@ impl Layout for LeftMaster {
 
             /* calculate the number of rows per column. we round up,
              * leaving the last column to possibly contain less rows */
-            rows = if count > 0 {
-                1 + ((count - 1) / columns)
-            } else {
-                0
-            };
+            let mut rows = 1 + ((count - 1) / columns);
 
             /* now iterate columns, resizing each one */
-            for column in right.split(Split::Vertical(columns)) {
+            for column in right.split(Split::Vertical(dbg!(columns))) {
                 /* this is for the final column */
                 if rows > count {
                     rows = count;
@@ -71,8 +92,8 @@ impl Layout for LeftMaster {
 
                 count -= rows;
 
-                for window in column.split(Split::Horizontal(rows)) {
-                    clients[index].resize(adapter, &window);
+                for window in column.split(Split::Horizontal(dbg!(rows))) {
+                    clients[index].resize(adapter, &dbg!(window));
                     index += 1;
                 }
 
