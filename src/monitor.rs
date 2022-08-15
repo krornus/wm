@@ -1,6 +1,5 @@
 use crate::rect::Rect;
 use crate::error::Error;
-// use crate::container::{Container, ContainerID};
 
 use xcb::{x, randr};
 

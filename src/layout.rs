@@ -1,4 +1,3 @@
-use crate::wm::Adapter;
 use crate::rect::{Rect, Cut, Split};
 use crate::client::Client;
 
@@ -8,8 +7,22 @@ pub enum Cell {
     Focus(Rect),
 }
 
+impl<'a> From<&'a Client> for Cell {
+    fn from(client: &'a Client) -> Self {
+        if client.visible() {
+            if client.focused() {
+                Cell::Focus(*client.rect())
+            } else {
+                Cell::Show(*client.rect())
+            }
+        } else {
+            Cell::Hide
+        }
+    }
+}
+
 pub trait Layout {
-    fn arrange(&mut self, adapter: &mut Adapter, scope: &Rect, cells: &mut [Cell]);
+    fn arrange(&mut self, scope: &Rect, cells: &mut [Cell]);
 }
 
 #[derive(Debug, Clone)]
@@ -22,12 +35,12 @@ impl Monacle {
 }
 
 impl Layout for Monacle {
-    fn arrange(&mut self, adapter: &mut Adapter, scope: &Rect, cells: &mut [Cell]) {
+    fn arrange(&mut self, scope: &Rect, cells: &mut [Cell]) {
         for i in 0..cells.len() {
             match &cells[i] {
                 Cell::Hide => {},
-                Cell::Show(r) => cells[i] = Cell::Hide,
-                Cell::Focus(r) => cells[i] = Cell::Focus(*scope),
+                Cell::Show(_) => cells[i] = Cell::Hide,
+                Cell::Focus(_) => cells[i] = Cell::Focus(*scope),
             }
         }
     }
@@ -51,59 +64,59 @@ impl LeftMaster {
 }
 
 impl Layout for LeftMaster {
-    fn arrange(&mut self, adapter: &mut Adapter, scope: &Rect, cells: &mut [Cell]) {
-        // let mut count = clients.len();
-        // let mut index = 0;
+    fn arrange(&mut self, scope: &Rect, cells: &mut [Cell]) {
+        let mut count = cells.len();
+        let mut index = 0;
 
-        // if count == 1 {
-        //     /* one client -- full screen */
-        //     clients[0].resize(adapter, scope);
-        // } else if count <= self.rows {
-        //     /* only enough windows for the masters */
-        //     for master in scope.split(Split::Horizontal(count)) {
-        //         clients[index].resize(adapter, &master);
-        //         index += 1;
-        //     }
-        // } else {
-        //     /* we have masters and a right grid */
-        //     let master = scope.w as f32 * self.factor;
-        //     let (left, right) = scope.cut(Cut::Vertical(master.round() as u16));
+        if count == 1 {
+            /* one client -- full screen */
+            cells[0] = Cell::Show(*scope);
+        } else if count <= self.rows {
+            /* only enough windows for the masters */
+            for master in scope.split(Split::Horizontal(count)) {
+                cells[index] = Cell::Show(master);
+                index += 1;
+            }
+        } else {
+            /* we have masters and a right grid */
+            let master = scope.w as f32 * self.factor;
+            let (left, right) = scope.cut(Cut::Vertical(master.round() as u16));
 
-        //     /* resize master(s) */
-        //     for master in left.split(Split::Horizontal(self.rows)) {
-        //         clients[index].resize(adapter, &master);
-        //         index += 1;
-        //     }
+            /* resize master(s) */
+            for master in left.split(Split::Horizontal(self.rows)) {
+                cells[index] = Cell::Show(master);
+                index += 1;
+            }
 
-        //     count -= self.rows;
+            count -= self.rows;
 
-        //     /* calculate the number of columns in the stack */
-        //     let columns = if count < self.columns {
-        //         count
-        //     } else {
-        //         self.columns
-        //     };
+            /* calculate the number of columns in the stack */
+            let columns = if count < self.columns {
+                count
+            } else {
+                self.columns
+            };
 
-        //     /* calculate the number of rows per column. we round up,
-        //      * leaving the last column to possibly contain less rows */
-        //     let mut rows = 1 + ((count - 1) / columns);
+            /* calculate the number of rows per column. we round up,
+             * leaving the last column to possibly contain less rows */
+            let mut rows = 1 + ((count - 1) / columns);
 
-        //     /* now iterate columns, resizing each one */
-        //     for column in right.split(Split::Vertical(columns)) {
-        //         /* this is for the final column */
-        //         if rows > count {
-        //             rows = count;
-        //         }
+            /* now iterate columns, resizing each one */
+            for column in right.split(Split::Vertical(columns)) {
+                /* this is for the final column */
+                if rows > count {
+                    rows = count;
+                }
 
-        //         count -= rows;
+                count -= rows;
 
-        //         for window in column.split(Split::Horizontal(rows)) {
-        //             clients[index].resize(adapter, &window);
-        //             index += 1;
-        //         }
+                for window in column.split(Split::Horizontal(rows)) {
+                    cells[index] = Cell::Show(window);
+                    index += 1;
+                }
 
-        //     }
-        // }
+            }
+        }
 
     }
 }

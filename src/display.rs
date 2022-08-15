@@ -1,9 +1,9 @@
-use crate::rect::{Cut, Rect};
+use crate::rect::Rect;
 use crate::error::Error;
 use crate::wm::Adapter;
 use crate::client::Client;
-use crate::container::{Window, WindowTree, WindowId};
-use crate::layout::{LeftMaster, Monacle};
+use crate::window::{Window, WindowTree, WindowId};
+use crate::layout::LeftMaster;
 
 use xcb::{x, randr};
 
@@ -105,7 +105,7 @@ struct Output {
 
 impl Output {
     fn new(monitor: Monitor) -> Self {
-        let mut window = WindowTree::new(LeftMaster::new());
+        let window = WindowTree::new(LeftMaster::new());
         let root = window.root();
 
         Output {
@@ -113,6 +113,11 @@ impl Output {
             window: window,
             focus: root,
         }
+    }
+
+    fn add_client(&mut self, adapter: &mut Adapter, client: Client) {
+        self.window.insert(&self.focus, Window::Client(client));
+        self.window.arrange(adapter, &self.focus, &self.monitor.rect);
     }
 }
 
@@ -143,8 +148,7 @@ impl Display {
         let focus = self.focus.unwrap();
         let output = &mut self.outputs[focus];
 
-        output.window.insert(&output.focus, Window::Client(client));
-        // output.window.arrange(adapter);
+        output.add_client(adapter, client);
     }
 
     #[inline]

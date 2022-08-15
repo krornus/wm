@@ -6,7 +6,7 @@ mod slab;
 mod tree;
 mod client;
 mod display;
-mod container;
+mod window;
 mod layout;
 mod rect;
 mod error;

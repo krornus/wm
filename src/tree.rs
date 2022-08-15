@@ -24,24 +24,29 @@ impl<T> TreeNode<T> {
 }
 
 impl<T> TreeNode<T> {
+    #[inline]
     pub fn index(&self) -> SlabIndex {
         self.index
     }
 
+    #[inline]
     pub fn parent(&self) -> Option<SlabIndex> {
         self.parent
     }
 
-    pub fn left(&self) -> Option<SlabIndex> {
+    #[inline]
+    pub fn previous_sibling(&self) -> Option<SlabIndex> {
         self.left
     }
 
-    pub fn right(&self) -> Option<SlabIndex> {
-        self.left
+    #[inline]
+    pub fn next_sibling(&self) -> Option<SlabIndex> {
+        self.right
     }
 
+    #[inline]
     pub fn child(&self) -> Option<SlabIndex> {
-        self.left
+        self.child
     }
 }
 
@@ -181,7 +186,7 @@ impl<'a, T> Iterator for Children<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         let index = self.index?;
         let node = self.tree.get(&index)?;
-        self.index = node.right;
+        self.index = node.next_sibling();
 
         Some(index)
     }

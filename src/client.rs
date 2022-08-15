@@ -22,6 +22,11 @@ impl Client {
     }
 
     #[inline]
+    pub fn focused(&self) -> bool {
+        self.focus
+    }
+
+    #[inline]
     pub fn rect(&self) -> &Rect {
         &self.rect
     }
@@ -35,10 +40,6 @@ impl Client {
             focus: false,
             rect: rect,
         }
-    }
-
-    pub fn focused(&self) -> bool {
-        self.focus
     }
 
     pub fn show(&mut self, adapter: &mut Adapter, visible: bool) {
@@ -57,7 +58,7 @@ impl Client {
         }
     }
 
-    pub fn focus(&mut self, adapter: &mut Adapter, p: bool) {
+    pub fn focus(&mut self, _: &mut Adapter, p: bool) {
         if self.focus != p {
             /* TODO: actually grab/release focus */
             self.focus = p;

@@ -114,8 +114,8 @@ pub struct KeyManager<T> {
 }
 
 impl<T: Copy> KeyManager<T> {
-    /* TODO: support refreshing mappings */
     pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
+        /* TODO: support refreshing mappings */
         let mut keymap = KeyMap::new(conn)?;
 
         let num_lock = keymap.mask(keysym::Num_Lock)?;

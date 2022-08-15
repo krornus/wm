@@ -16,13 +16,18 @@ pub enum Window {
 
 pub struct WindowTree {
     tree: tree::Tree<Window>,
+    focus: WindowId,
 }
 
 impl WindowTree {
     pub fn new(layout: impl Layout + 'static) -> Self {
         let win = Window::Layout(Box::new(layout));
+        let tree = tree::Tree::new(win);
+        let root = tree.root();
+
         WindowTree {
-            tree: tree::Tree::new(win)
+            tree: tree,
+            focus: root,
         }
     }
 
@@ -32,6 +37,10 @@ impl WindowTree {
     }
 
     #[inline]
+    pub fn focus(&self) -> WindowId {
+        self.focus
+    }
+
     pub fn get_client(&self, window: x::Window) -> Option<&Client> {
         self.tree.iter().find_map(|win| match win {
             Window::Client(ref c) => if window == c.window() {
@@ -45,7 +54,6 @@ impl WindowTree {
         })
     }
 
-    #[inline]
     pub fn get_client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
         self.tree.iter_mut().find_map(|win| match win {
             Window::Client(ref mut c) => if window == c.window() {
@@ -59,23 +67,46 @@ impl WindowTree {
         })
     }
 
-    #[inline]
     pub fn insert(&mut self, id: &WindowId, value: Window) -> WindowId {
         /* TODO: fix this so that the type system only allows inserting into a layout */
+        match self.tree.get(id).unwrap().value {
+            Window::Client(_) => { panic!("cannot add children to client") },
+            _ => {},
+        }
+
         self.tree.insert(id, value).unwrap()
     }
 
-    // pub fn take(&mut self, mut other: Container) {
-    //     let root = other.tree.root();
-    //     let children: Vec<_> = other.tree.children(root)
-    //         .collect();
+    pub fn show(&mut self, adapter: &mut Adapter, index: &WindowId, visible: bool) {
+        let mut node = self.tree.get_mut(index).unwrap();
 
-    //     let parent = self.tree.root();
+        match node.value {
+            Window::Client(ref mut client) => {
+                return client.show(adapter, visible);
+            },
+            _ => {},
+        }
 
-    //     for child in children.into_iter().rev() {
-    //         self.tree.take(&mut other.tree, &child, &parent);
-    //     }
-    // }
+        let mut child = node.child();
+
+        while let Some(ref id) = child {
+            /* get everything from node at the start in order to drop it for
+             * lexical scoping to take effect, allowing us to recurse */
+            node = self.tree.get_mut(&id).unwrap();
+            child = node.next_sibling();
+
+            match node.value {
+                Window::Client(ref mut client) => {
+                    client.show(adapter, visible);
+                },
+                Window::Layout(_) => {
+                    let id = node.index();
+                    self.show(adapter, &id, visible);
+                },
+            }
+        }
+
+    }
 
     pub fn arrange(&mut self, adapter: &mut Adapter, index: &WindowId, rect: &Rect) {
         let mut cells = vec![];
@@ -86,15 +117,20 @@ impl WindowTree {
 
         while let Some(i) = child {
             node = self.tree.get(&i).unwrap();
-            child = node.right();
-            cells.push(Cell::Hide);
+            child = node.next_sibling();
+
+            if let Window::Client(ref c) = node.value {
+                cells.push(Cell::from(c));
+            } else {
+                cells.push(Cell::Hide);
+            }
         }
 
         let mut node = self.tree.get_mut(index).unwrap();
 
         match node.value {
             Window::Layout(ref mut layout) => {
-                layout.arrange(adapter, rect, &mut cells);
+                layout.arrange(rect, &mut cells);
             },
             _ => {
             }
@@ -104,8 +140,10 @@ impl WindowTree {
         let mut child = self.tree.get(index).unwrap().child();
 
         while let Some(ref id) = child {
-            let node = self.tree.get_mut(&id).unwrap();
-            child = node.right();
+            /* get everything from node at the start in order to drop it for
+             * lexical scoping to take effect, allowing us to recurse */
+            node = self.tree.get_mut(&id).unwrap();
+            child = node.next_sibling();
 
             match node.value {
                 Window::Client(ref mut client) => {
@@ -123,13 +161,20 @@ impl WindowTree {
                         },
                     }
                 },
-                Window::Layout(ref mut layout) => {
+                Window::Layout(_) => {
+                    let id = node.index();
+
                     match &cells[i] {
-                        Cell::Show(r) => {
-                            let x = node.index();
-                            self.arrange(adapter, &x, r)
+                        Cell::Hide => {
+                            self.show(adapter, &id, false);
                         },
-                        _ => {},
+                        Cell::Show(r) => {
+                            self.arrange(adapter, &id, r)
+                        },
+                        Cell::Focus(r) => {
+                            self.focus = id;
+                            self.arrange(adapter, &id, r)
+                        },
                     }
                 },
             }
@@ -138,16 +183,15 @@ impl WindowTree {
         }
     }
 
-    pub fn show(&mut self, adapter: &mut Adapter, visible: bool) {
+    pub fn take(&mut self, mut other: WindowTree) {
+        let root = other.tree.root();
+        let children: Vec<_> = other.tree.children(root)
+            .collect();
+
+        let parent = self.tree.root();
+
+        for child in children.into_iter().rev() {
+            self.tree.take(&mut other.tree, &child, &parent);
+        }
     }
-
-    // #[inline]
-    // pub fn get(&self, id: &WindowId) -> Option<&Scope> {
-    //     self.tree.get(id).map(|n| &n.value)
-    // }
-
-    // #[inline]
-    // pub fn get_mut(&mut self, id: &WindowId) -> Option<&mut Scope> {
-    //     self.tree.get_mut(id).map(|n| &mut n.value)
-    // }
 }
