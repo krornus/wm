@@ -2,7 +2,7 @@ use crate::rect::Rect;
 use crate::error::Error;
 use crate::wm::Adapter;
 use crate::client::Client;
-use crate::window::{Window, WindowTree, WindowId};
+use crate::window::{Window, WindowTree};
 use crate::layout::LeftMaster;
 
 use xcb::{x, randr};
@@ -100,7 +100,7 @@ impl Monitor {
 struct Output {
     monitor: Monitor,
     window: WindowTree,
-    focus: WindowId,
+    focus: usize,
 }
 
 impl Output {
@@ -116,8 +116,8 @@ impl Output {
     }
 
     fn add_client(&mut self, adapter: &mut Adapter, client: Client) {
-        self.window.insert(&self.focus, Window::Client(client));
-        self.window.arrange(adapter, &self.focus, &self.monitor.rect);
+        self.window.insert(self.focus, Window::Client(client));
+        self.window.arrange(adapter, self.focus, &self.monitor.rect);
     }
 }
 
