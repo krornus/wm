@@ -2,7 +2,7 @@ use crate::rect::{Cut, Rect};
 use crate::error::Error;
 use crate::wm::Adapter;
 use crate::client::Client;
-use crate::container::{Scope, Container, ContainerId};
+use crate::container::{Window, WindowTree, WindowId};
 use crate::layout::{LeftMaster, Monacle};
 
 use xcb::{x, randr};
@@ -99,27 +99,19 @@ impl Monitor {
 
 struct Output {
     monitor: Monitor,
-    container: Container,
-    focus: ContainerId,
+    window: WindowTree,
+    focus: WindowId,
 }
 
 impl Output {
     fn new(monitor: Monitor) -> Self {
-        let mut container = Container::new(*monitor.rect(), Monacle::new());
-        let (top, rest) = monitor.rect().cut(Cut::Horizontal(25));
-
-        let root = container.root();
-
-        let bar = Scope::new(top, Monacle::new());
-        let window = Scope::new(rest, LeftMaster::new());
-
-        container.insert(&root, bar).unwrap();
-        let focus = container.insert(&root, window).unwrap();
+        let mut window = WindowTree::new(LeftMaster::new());
+        let root = window.root();
 
         Output {
             monitor: monitor,
-            container: container,
-            focus: focus,
+            window: window,
+            focus: root,
         }
     }
 }
@@ -151,19 +143,19 @@ impl Display {
         let focus = self.focus.unwrap();
         let output = &mut self.outputs[focus];
 
-        output.container.add_client(&output.focus, client);
-        output.container.arrange(adapter);
+        output.window.insert(&output.focus, Window::Client(client));
+        // output.window.arrange(adapter);
     }
 
     #[inline]
     pub fn get_client(&self, window: x::Window) -> Option<&Client> {
         self.outputs.iter()
-            .find_map(|output| output.container.get_client(window))
+            .find_map(|output| output.window.get_client(window))
     }
 
     #[inline]
     pub fn get_client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
         self.outputs.iter_mut()
-            .find_map(|output| output.container.get_client_mut(window))
+            .find_map(|output| output.window.get_client_mut(window))
     }
 }

@@ -3,6 +3,7 @@ use crate::slab::{self, Slab, SlabIndex};
 
 pub struct TreeNode<T> {
     pub value: T,
+    index: SlabIndex,
     parent: Option<SlabIndex>,
     left: Option<SlabIndex>,
     right: Option<SlabIndex>,
@@ -10,14 +11,37 @@ pub struct TreeNode<T> {
 }
 
 impl<T> TreeNode<T> {
-    fn new(value: T) -> Self {
+    fn new(index: SlabIndex, value: T) -> Self {
         TreeNode {
             value: value,
+            index: index,
             parent: None,
             left: None,
             right: None,
             child: None,
         }
+    }
+}
+
+impl<T> TreeNode<T> {
+    pub fn index(&self) -> SlabIndex {
+        self.index
+    }
+
+    pub fn parent(&self) -> Option<SlabIndex> {
+        self.parent
+    }
+
+    pub fn left(&self) -> Option<SlabIndex> {
+        self.left
+    }
+
+    pub fn right(&self) -> Option<SlabIndex> {
+        self.left
+    }
+
+    pub fn child(&self) -> Option<SlabIndex> {
+        self.left
     }
 }
 
@@ -30,8 +54,9 @@ impl<T> Tree<T> {
     pub fn new(value: T) -> Self {
         let mut slab = Slab::new();
 
-        let node = TreeNode::new(value);
-        let index = slab.insert(node);
+        let index = slab.vacant_key();
+        let node = TreeNode::new(index, value);
+        slab.insert(node);
 
         Tree {
             root: index,
@@ -45,7 +70,7 @@ impl<T> Tree<T> {
 
     pub fn insert(&mut self, index: &SlabIndex, value: T) -> Option<SlabIndex> {
         let insert_index = self.slab.vacant_key();
-        let mut node = TreeNode::new(value);
+        let mut node = TreeNode::new(insert_index, value);
 
         /* set the parent index in the new child */
         let parent = self.get_mut(index)?;

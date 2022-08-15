@@ -3,3 +3,7 @@ selmon:
 
 client:
     apply changes to client struct (i.e. visible) after cookie check
+
+
+stop using generational indexing for the tree
+    - we unwrap everywhere already

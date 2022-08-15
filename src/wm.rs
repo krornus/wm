@@ -172,8 +172,6 @@ impl<T: Copy> WindowManager<T> {
             if let Ok(Fork::Child) = fork::fork() {
                 fork::setsid().expect("setsid failed");
 
-                println!("{:?}", args);
-
                 /* swap to const pointers. into_raw() can leak here
                  * because we will execvp() or unreachable!() */
                 let cs: Vec<_> = args.into_iter().map(|x| {
