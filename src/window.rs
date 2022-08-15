@@ -140,8 +140,6 @@ impl WindowTree {
         let mut child = self.tree.get(index).unwrap().child();
 
         while let Some(ref id) = child {
-            /* get everything from node at the start in order to drop it for
-             * lexical scoping to take effect, allowing us to recurse */
             node = self.tree.get_mut(&id).unwrap();
             child = node.next_sibling();
 
@@ -164,6 +162,7 @@ impl WindowTree {
                 Window::Layout(_) => {
                     let id = node.index();
 
+                    /* node is dropped here via lexical scoping. */
                     match &cells[i] {
                         Cell::Hide => {
                             self.show(adapter, &id, false);
