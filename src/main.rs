@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use xcb::x;
+
 mod wm;
 mod kb;
 mod tag;
@@ -13,23 +15,30 @@ mod error;
 
 #[derive(Copy, Clone)]
 enum Event {
-
+    Spawn(&'static str),
 }
 
 fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
-    wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
+
+    wm.bind(&kb::Binding{
+        view: None,
+        mask: x::KeyButMask::MOD4,
+        keysym: kb::keysym::Return,
+        press: kb::Press::Press,
+        value: Event::Spawn("xterm /bin/zsh"),
+    })?;
 
     loop {
         match wm.next()? {
-            wm::Event::MonitorConnect(_) => {
-                println!("connect monitor");
+            wm::Event::MonitorConnect(id) => {
+                let rect = wm.display().get_view(id).unwrap().rect();
+                println!("connect monitor: {}", rect);
             },
             wm::Event::MonitorResize(id) => {
-                println!("resize monitor");
                 wm.arrange(id)?;
+            },
+            wm::Event::UserEvent(Event::Spawn(args)) => {
+                wm.spawn(args);
             },
             _ => {
             },

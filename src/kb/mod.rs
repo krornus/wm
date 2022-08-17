@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::error::Error;
 use crate::wm::Adapter;
+use crate::display::ViewId;
 
 use xcb::x::{self, Keysym, Keycode};
 
@@ -104,16 +105,94 @@ impl KeyMap {
     }
 }
 
-pub struct KeyManager<T> {
+#[derive(Copy, Clone)]
+pub enum Press {
+    Press,
+    Release,
+    Both,
+}
+
+pub struct Binding<T: Copy> {
+    pub view: Option<ViewId>,
+    pub mask: x::KeyButMask,
+    pub keysym: Keysym,
+    pub press: Press,
+    pub value: T,
+}
+
+#[derive(Clone)]
+struct BindValue<T: Copy> {
+    view: Option<ViewId>,
+    press: Press,
+    value: T,
+}
+
+impl<T: Copy> From<&Binding<T>> for BindValue<T> {
+    fn from(binding: &Binding<T>) -> Self {
+        BindValue {
+            view: binding.view,
+            press: binding.press,
+            value: binding.value,
+        }
+    }
+}
+
+struct BindingSet<T: Copy> {
+    local: Vec<BindValue<T>>,
+    global: Option<BindValue<T>>,
+}
+
+impl<T: Copy> BindingSet<T> {
+    fn new() -> Self {
+        Self {
+            local: vec![],
+            global: None,
+        }
+    }
+
+    fn bind(&mut self, binding: &Binding<T>) {
+        let value = BindValue::from(binding);
+
+        if binding.view.is_none() {
+            self.global = Some(value);
+        } else {
+            let at = self.local.iter().position(|x| x.view == binding.view);
+
+            match at {
+                Some(i) => {
+                    self.local[i] = value;
+                },
+                None => {
+                    self.local.push(value);
+                }
+            }
+        }
+    }
+
+    fn get(&self, view: Option<ViewId>) -> Option<T> {
+        let at = view.and_then(|id| self.local.iter().position(|x| x.view == Some(id)));
+
+        match at {
+            Some(i) => {
+                Some(self.local[i].value)
+            },
+            None => {
+                self.global.as_ref().map(|b| b.value)
+            }
+        }
+    }
+}
+
+pub struct Keys<T: Copy> {
     root: x::Window,
     keymap: KeyMap,
     num_lock: x::KeyButMask,
     caps_lock: x::KeyButMask,
     scroll_lock: x::KeyButMask,
-    bindings: HashMap<(x::KeyButMask, Keycode), T>,
+    bindings: HashMap<(x::KeyButMask, Keycode), BindingSet<T>>,
 }
 
-impl<T: Copy> KeyManager<T> {
+impl<T: Copy> Keys<T> {
     pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
         /* TODO: support refreshing mappings */
         let mut keymap = KeyMap::new(conn)?;
@@ -122,7 +201,7 @@ impl<T: Copy> KeyManager<T> {
         let caps_lock = keymap.mask(keysym::Caps_Lock)?;
         let scroll_lock = keymap.mask(keysym::Scroll_Lock)?;
 
-        Ok(KeyManager {
+        Ok(Keys {
             root: root,
             keymap: keymap,
             num_lock: num_lock,
@@ -148,33 +227,27 @@ impl<T: Copy> KeyManager<T> {
         })
     }
 
-    pub fn bind(
-        &mut self,
-        adapter: &mut Adapter<T>,
-        m: x::KeyButMask,
-        k: Keysym,
-        v: T,
-    ) -> Result<(), Error> {
-        for kc in self.keymap.keycodes(k) {
-            self.bindings.insert((m, kc), v);
+    pub fn bind(&mut self, adapter: &mut Adapter<T>, binding: &Binding<T>) -> Result<(), Error> {
+        for kc in self.keymap.keycodes(binding.keysym) {
+            self.bindings.entry((binding.mask, kc))
+                .or_insert(BindingSet::new())
+                .bind(&binding);
 
-            self.grab(adapter, m, kc);
-            self.grab(adapter, m | self.num_lock, kc);
-            self.grab(adapter, m | self.caps_lock, kc);
-            self.grab(adapter, m | self.scroll_lock, kc);
-            self.grab(adapter, m | self.caps_lock | self.num_lock, kc);
-            self.grab(adapter, m | self.scroll_lock | self.num_lock, kc);
-            self.grab(adapter, m | self.scroll_lock | self.caps_lock, kc);
-            self.grab(adapter, m | self.num_lock | self.scroll_lock | self.caps_lock, kc);
+            self.grab(adapter, binding.mask, kc);
+            self.grab(adapter, binding.mask | self.num_lock, kc);
+            self.grab(adapter, binding.mask | self.caps_lock, kc);
+            self.grab(adapter, binding.mask | self.scroll_lock, kc);
+            self.grab(adapter, binding.mask | self.caps_lock | self.num_lock, kc);
+            self.grab(adapter, binding.mask | self.scroll_lock | self.num_lock, kc);
+            self.grab(adapter, binding.mask | self.scroll_lock | self.caps_lock, kc);
+            self.grab(adapter, binding.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
         }
-
-        adapter.check()?;
 
         Ok(())
     }
 
-    pub fn get(&self, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
+    pub fn get(&self, focus: Option<ViewId>, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
         m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
-        self.bindings.get(&(m, k)).copied()
+        self.bindings.get(&(m, k)).and_then(|b| b.get(focus))
     }
 }

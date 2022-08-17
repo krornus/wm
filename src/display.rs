@@ -11,7 +11,7 @@ use crate::layout::LeftMaster;
 use xcb::{x, randr};
 
 #[derive(Debug)]
-pub struct Monitor {
+struct Monitor {
     root: x::Window,
     name: String,
     primary: bool,
@@ -39,7 +39,7 @@ impl Monitor {
     }
 
     /// Get a vector of all monitors with active outputs
-    pub fn query_all(conn: &xcb::Connection, root: x::Window) -> Result<(Vec<Monitor>, Option<usize>), Error> {
+    fn query_all(conn: &xcb::Connection, root: x::Window) -> Result<(Vec<Monitor>, Option<usize>), Error> {
         let cookie = conn.send_request(&randr::GetScreenResourcesCurrent {
             window: root,
         });
@@ -115,23 +115,6 @@ impl Monitor {
 
         Ok((monitors, primary))
     }
-
-    pub fn root(&self) -> x::Window {
-        self.root
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn primary(&self) -> bool {
-        self.primary
-    }
-
-    pub fn rect(&self) -> &Rect {
-        &self.rect
-    }
-
 }
 
 pub struct View {
@@ -152,13 +135,20 @@ impl View {
         }
     }
 
+    #[inline]
     pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>) {
         self.window.arrange(adapter, self.focus, &self.monitor.rect);
     }
 
+    #[inline]
+    pub fn rect(&self) -> &Rect {
+        &self.monitor.rect
+    }
+
+    #[inline]
     pub fn add_client<T>(&mut self, adapter: &mut Adapter<T>, client: Client) {
         self.window.insert(self.focus, Window::Client(client));
-        self.window.arrange(adapter, self.focus, &self.monitor.rect);
+        self.arrange(adapter);
     }
 }
 
@@ -284,11 +274,17 @@ impl Display {
             .find_map(|(_,output)| output.window.get_client_mut(window))
     }
 
+    #[inline]
     pub fn get_view(&self, id: ViewId) -> Option<&View> {
         self.views.get(&id.index)
     }
 
+    #[inline]
     pub fn get_view_mut(&mut self, id: ViewId) -> Option<&mut View> {
         self.views.get_mut(&id.index)
+    }
+
+    pub fn focus(&self) -> Option<ViewId> {
+        self.focus
     }
 }

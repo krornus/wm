@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use crate::error::Error;
 use crate::rect::Rect;
-use crate::kb::KeyManager;
+use crate::kb::{Keys, Binding};
 use crate::tag::Tags;
 use crate::client::Client;
 use crate::display::{ViewId, Display};
@@ -65,13 +65,13 @@ pub enum Event<T> {
     UserEvent(T),
 }
 
-pub struct WindowManager<T> {
+pub struct WindowManager<T: Copy> {
     root: x::Window,
     adapter: Adapter<T>,
     signal: Arc<AtomicUsize>,
     tags: Tags,
     display: Display,
-    keys: KeyManager<T>,
+    keys: Keys<T>,
 }
 
 impl<T: Copy> WindowManager<T> {
@@ -106,7 +106,7 @@ impl<T: Copy> WindowManager<T> {
         let mut adapter = Adapter::new(conn);
 
         let tags = Tags::new();
-        let keys = KeyManager::new(&adapter.conn, root)?;
+        let keys = Keys::new(&adapter.conn, root)?;
         let display = Display::new(&mut adapter, root)?;
 
         adapter.conn.send_and_check_request(&randr::SelectInput {
@@ -181,7 +181,9 @@ impl<T: Copy> WindowManager<T> {
 
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                let value = self.keys.get(e.state(), e.detail() as Keycode);
+                let focus = dbg!(self.display.focus());
+                dbg!(&e);
+                let value = self.keys.get(focus, e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
@@ -204,7 +206,7 @@ impl<T: Copy> WindowManager<T> {
                 self.display.configure(&mut self.adapter, e.window())?;
                 Ok(Event::Empty)
             }
-            e => {
+            _ => {
                 Ok(Event::Empty)
             },
         };
@@ -212,6 +214,11 @@ impl<T: Copy> WindowManager<T> {
         self.adapter.check()?;
 
         e
+    }
+
+    #[inline]
+    pub fn bind(&mut self, binding: &Binding<T>) -> Result<(), Error> {
+        self.keys.bind(&mut self.adapter, binding)
     }
 
     pub fn spawn(&self, cmd: &str) {
@@ -236,6 +243,10 @@ impl<T: Copy> WindowManager<T> {
                 std::process::exit(1);
             }
         }
+    }
+
+    pub fn display(&self) -> &Display {
+        &self.display
     }
 
     pub fn arrange(&mut self, id: ViewId) -> Result<(), Error> {
