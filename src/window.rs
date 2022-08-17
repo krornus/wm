@@ -74,7 +74,7 @@ impl WindowTree {
         self.tree.insert(id, value)
     }
 
-    pub fn show(&mut self, adapter: &mut Adapter, index: usize, visible: bool) {
+    pub fn show<T>(&mut self, adapter: &mut Adapter<T>, index: usize, visible: bool) {
         let mut node = self.tree.get_mut(index);
 
         match node.value {
@@ -105,7 +105,7 @@ impl WindowTree {
 
     }
 
-    pub fn arrange(&mut self, adapter: &mut Adapter, index: usize, rect: &Rect) {
+    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>, index: usize, rect: &Rect) {
         let mut cells = vec![];
 
         let parent = self.tree.get(index);

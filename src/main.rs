@@ -21,12 +21,19 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
     wm.spawn("xterm /bin/zsh");
     wm.spawn("xterm /bin/zsh");
     wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
-    wm.spawn("xterm /bin/zsh");
 
     loop {
-        wm.next()?;
+        match wm.next()? {
+            wm::Event::MonitorConnect(_) => {
+                println!("connect monitor");
+            },
+            wm::Event::MonitorResize(id) => {
+                println!("resize monitor");
+                wm.arrange(id)?;
+            },
+            _ => {
+            },
+        }
     }
 
 }

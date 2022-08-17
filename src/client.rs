@@ -42,7 +42,7 @@ impl Client {
         }
     }
 
-    pub fn show(&mut self, adapter: &mut Adapter, visible: bool) {
+    pub fn show<T>(&mut self, adapter: &mut Adapter<T>, visible: bool) {
         if self.visible != visible {
             self.visible = visible;
 
@@ -58,14 +58,14 @@ impl Client {
         }
     }
 
-    pub fn focus(&mut self, _: &mut Adapter, p: bool) {
+    pub fn focus<T>(&mut self, _: &mut Adapter<T>, p: bool) {
         if self.focus != p {
             /* TODO: actually grab/release focus */
             self.focus = p;
         }
     }
 
-    pub fn resize(&mut self, adapter: &mut Adapter, rect: &Rect) {
+    pub fn resize<T>(&mut self, adapter: &mut Adapter<T>, rect: &Rect) {
         if &self.rect != rect {
             self.rect = *rect;
 

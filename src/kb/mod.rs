@@ -133,7 +133,7 @@ impl<T: Copy> KeyManager<T> {
     }
 
     #[inline]
-    fn grab(&self, adapter: &mut Adapter, modifiers: x::KeyButMask, keycode: Keycode) {
+    fn grab(&self, adapter: &mut Adapter<T>, modifiers: x::KeyButMask, keycode: Keycode) {
         let m = x::ModMask::from_bits(modifiers.bits()).unwrap();
 
         println!("grab: [{:?} + {:?}]", modifiers, keycode);
@@ -150,7 +150,7 @@ impl<T: Copy> KeyManager<T> {
 
     pub fn bind(
         &mut self,
-        adapter: &mut Adapter,
+        adapter: &mut Adapter<T>,
         m: x::KeyButMask,
         k: Keysym,
         v: T,

@@ -1,27 +1,31 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::VecDeque;
 
 use crate::error::Error;
 use crate::rect::Rect;
 use crate::kb::KeyManager;
 use crate::tag::Tags;
 use crate::client::Client;
-use crate::display::Display;
+use crate::display::{ViewId, Display};
 
 use fork::Fork;
 use xcb::x::{self, Keycode};
+use xcb::randr;
 use signal_hook::consts::signal::*;
 
-pub struct Adapter {
+pub struct Adapter<T> {
     pub conn: xcb::Connection,
     pending: Vec<xcb::VoidCookieChecked>,
+    events: VecDeque<Event<T>>,
 }
 
-impl Adapter {
+impl<T> Adapter<T> {
     pub fn new(conn: xcb::Connection) -> Self {
         Adapter {
             conn: conn,
             pending: vec![],
+            events: VecDeque::new(),
         }
     }
 
@@ -41,16 +45,29 @@ impl Adapter {
 
         Ok(ok)
     }
+
+    pub fn push(&mut self, e: Event<T>) {
+        self.events.push_front(e);
+    }
+
+    pub fn pop(&mut self) -> Option<Event<T>> {
+        self.events.pop_back()
+    }
 }
 
 pub enum Event<T> {
     Empty,
     Interrupt,
+    MonitorConnect(ViewId),
+    MonitorResize(ViewId),
+    MonitorDisconnect(ViewId),
+    MonitorPrimary(ViewId),
     UserEvent(T),
 }
 
 pub struct WindowManager<T> {
-    adapter: Adapter,
+    root: x::Window,
+    adapter: Adapter<T>,
     signal: Arc<AtomicUsize>,
     tags: Tags,
     display: Display,
@@ -60,13 +77,20 @@ pub struct WindowManager<T> {
 impl<T: Copy> WindowManager<T> {
     /// Create a new WindowManager struct, with optional X11 display name
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
-        let (conn, main) = xcb::Connection::connect(name)?;
+        let (conn, main) = xcb::Connection::connect_with_extensions(
+            name,
+            &[xcb::Extension::RandR],
+            &[]
+        )?;
 
         let setup = conn.get_setup();
         let screen = setup
             .roots()
             .nth(main as usize)
             .ok_or(Error::MissingScreen)?;
+
+        let roots: Vec<_> = setup.roots().map(|x| x.root()).collect();
+        dbg!(roots);
 
         let root = screen.root();
         conn.send_and_check_request(&x::ChangeWindowAttributes {
@@ -79,13 +103,24 @@ impl<T: Copy> WindowManager<T> {
             )],
         }).map_err(|_| Error::AlreadyRunning)?;
 
+        let mut adapter = Adapter::new(conn);
+
         let tags = Tags::new();
-        let keys = KeyManager::new(&conn, root)?;
-        let display = Display::new(&conn, root)?;
+        let keys = KeyManager::new(&adapter.conn, root)?;
+        let display = Display::new(&mut adapter, root)?;
+
+        adapter.conn.send_and_check_request(&randr::SelectInput {
+            window: root,
+            enable: randr::NotifyMask::SCREEN_CHANGE |
+                    randr::NotifyMask::OUTPUT_CHANGE |
+                    randr::NotifyMask::CRTC_CHANGE |
+                    randr::NotifyMask::OUTPUT_PROPERTY
+        })?;
 
         let wm = WindowManager {
+            root: root,
             signal: Arc::new(AtomicUsize::new(0)),
-            adapter: Adapter::new(conn),
+            adapter: adapter,
             display: display,
             keys: keys,
             tags: tags,
@@ -139,6 +174,11 @@ impl<T: Copy> WindowManager<T> {
             _ => {}
         }
 
+        match self.adapter.pop() {
+            Some(e) => { return Ok(e) },
+            None => {},
+        }
+
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let value = self.keys.get(e.state(), e.detail() as Keycode);
@@ -156,7 +196,15 @@ impl<T: Copy> WindowManager<T> {
             xcb::Event::X(xcb::x::Event::DestroyNotify(ref e)) => {
                 self.destroy(e)
             },
-            _ => {
+            xcb::Event::RandR(xcb::randr::Event::ScreenChangeNotify(_)) => {
+                self.display.update(&mut self.adapter)?;
+                Ok(Event::Empty)
+            },
+            xcb::Event::X(xcb::x::Event::ConfigureNotify(ref e)) => {
+                self.display.configure(&mut self.adapter, e.window())?;
+                Ok(Event::Empty)
+            }
+            e => {
                 Ok(Event::Empty)
             },
         };
@@ -188,6 +236,15 @@ impl<T: Copy> WindowManager<T> {
                 std::process::exit(1);
             }
         }
+    }
+
+    pub fn arrange(&mut self, id: ViewId) -> Result<(), Error> {
+        let view = self.display.get_view_mut(id).ok_or(Error::MissingView)?;
+
+        view.arrange(&mut self.adapter);
+        self.adapter.check()?;
+
+        Ok(())
     }
 
     /// handle a ConfigureRequestEvent, which is a request to configure a window's properties
