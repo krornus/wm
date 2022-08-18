@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::rect::Rect;
-use crate::tag::{Tags, TagMask};
+use crate::tag::{TagSetId, TagMask};
 use crate::slab::{SlabIndex, Slab};
 use crate::error::Error;
 use crate::wm::{Adapter, Event};
@@ -137,8 +137,8 @@ impl View {
     }
 
     #[inline]
-    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>) {
-        self.window.arrange(adapter, self.focus, &self.monitor.rect);
+    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>, mask: &HashMap<TagSetId, TagMask>) {
+        self.window.arrange(adapter, mask, self.focus, &self.monitor.rect);
     }
 
     #[inline]
@@ -147,10 +147,8 @@ impl View {
     }
 
     #[inline]
-    pub fn add_client<T>(&mut self, adapter: &mut Adapter<T>, client: Client) -> usize {
-        let index = self.window.insert(self.focus, Window::Client(client));
-        self.arrange(adapter);
-        index
+    pub fn add_client(&mut self, client: Client) -> usize {
+        self.window.insert(self.focus, Window::Client(client))
     }
 }
 
@@ -256,12 +254,11 @@ impl Display {
         Ok(())
     }
 
-    pub fn add_client<T>(&mut self, adapter: &mut Adapter<T>, client: Client) {
-        /* TODO: handle cases with no focus (no monitor) */
-        let focus = self.focus.unwrap();
+    pub fn add_client(&mut self, client: Client) -> usize {
+        let focus = self.focus();
         let output = self.views.get_mut(&focus.index).unwrap();
 
-        output.add_client(adapter, client);
+        output.add_client(client)
     }
 
     #[inline]
@@ -286,7 +283,8 @@ impl Display {
         self.views.get_mut(&id.index)
     }
 
-    pub fn focus(&self) -> Option<ViewId> {
-        self.focus
+    pub fn focus(&self) -> ViewId {
+        /* TODO: handle cases with no focus (no monitor) */
+        self.focus.unwrap()
     }
 }

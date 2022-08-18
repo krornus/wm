@@ -36,11 +36,17 @@ impl TagMask {
         }
     }
 
+    fn set_at(&mut self, i: usize, p: bool) {
+        self.mask.resize(i + 1, false);
+        self.mask.set(i, p);
+    }
+
     pub fn set(&mut self, tag: Tag) {
         match tag {
-            Tag::On(i) => self.mask.set(i, true),
-            Tag::Off(i) => self.mask.set(i, false),
+            Tag::On(i) => self.set_at(i, true),
+            Tag::Off(i) => self.set_at(i, false),
             Tag::Toggle(i) => {
+                self.mask.resize(i + 1, false);
                 let mut p = self.mask.get_mut(i)
                     .expect("tag index out of range");
                 *p = !*p;
@@ -82,6 +88,10 @@ impl Tags {
 
     pub fn mask_mut(&mut self, id: TagSetId) -> Option<&mut TagMask> {
         self.tagmasks.get_mut(&id)
+    }
+
+    pub fn masks(&self) -> &HashMap<TagSetId, TagMask> {
+        &self.tagmasks
     }
 
     pub fn visible(&self, id: TagSetId, selection: &TagMask) -> Option<bool> {

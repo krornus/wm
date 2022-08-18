@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::tag::{Tag, TagSetId, TagMask};
+use crate::tag::{TagSetId, TagMask};
 use crate::rect::Rect;
 use crate::wm::Adapter;
 
@@ -86,12 +86,18 @@ impl Client {
         }
     }
 
-    pub fn mask_mut(&mut self, id: TagSetId) -> &mut TagMask {
-        self.mask.entry(id).or_insert_with(|| {
-            let mut mask = TagMask::new();
-            mask.set(Tag::On(0));
+    pub fn mask(&self, mask: &HashMap<TagSetId, TagMask>) -> bool {
+        for (id, mask) in mask.iter() {
+            match self.mask.get(id) {
+                Some(m) => if !mask.visible(m) {
+                    return false;
+                }
+                None => if !mask.visible(&TagMask::new()) {
+                    return false;
+                }
+            }
+        }
 
-            mask
-        })
+        true
     }
 }

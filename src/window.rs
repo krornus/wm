@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::tree;
 use crate::wm::Adapter;
+use crate::tag::{TagSetId, TagMask};
 use crate::rect::Rect;
 use crate::client::Client;
 use crate::layout::{Cell, Layout};
@@ -19,8 +22,9 @@ pub struct WindowTree {
 impl WindowTree {
     pub fn new(layout: impl Layout + 'static) -> Self {
         let win = Window::Layout(Box::new(layout));
-        let tree = tree::Tree::new(win);
-        let root = tree.root();
+        let mut tree = tree::Tree::new();
+        tree.swap_root(win);
+        let root = tree.root().unwrap();
 
         WindowTree {
             tree: tree,
@@ -30,7 +34,7 @@ impl WindowTree {
 
     #[inline]
     pub fn root(&self) -> usize {
-        self.tree.root()
+        self.tree.root().unwrap()
     }
 
     #[inline]
@@ -105,33 +109,37 @@ impl WindowTree {
 
     }
 
-    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>, index: usize, rect: &Rect) {
+    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>, mask: &HashMap<TagSetId, TagMask>, index: usize, rect: &Rect) {
+        let masktree = MaskTree::new(adapter, self, mask, index);
+
+        match masktree.root() {
+            Some(root) => self.arrange_recursive(adapter, &masktree, root, rect),
+            None => {},
+        }
+    }
+
+    fn arrange_recursive<T>(&mut self, adapter: &mut Adapter<T>, masktree: &MaskTree, index: usize, rect: &Rect) {
         let mut cells = vec![];
-
-        let parent = self.tree.get(index);
+        let parent = masktree.get(index);
         let mut child = parent.child();
-        let mut node;
 
-        /* TODO: implement masking. we need to know two things:
-         *  1) is this child visible within all masks
-         *  2) do any sub layouts actuall contain children?
-         *     if not -- they shouldn't be pushed.
-         */
-        while let Some(i) = child {
-            node = self.tree.get(i);
+        while let Some(id) = child {
+            let node = masktree.get(id);
+            let window = self.tree.get(node.value);
+
             child = node.next_sibling();
 
-            if let Window::Client(ref c) = node.value {
+            if let Window::Client(ref c) = window.value {
                 cells.push(Cell::from(c));
             } else {
                 cells.push(Cell::Hide);
             }
         }
 
-        let mut node = self.tree.get_mut(index);
+        let node = masktree.get(index);
+        let window = self.tree.get_mut(node.value);
 
-        /* TODO: by this time, we must have recursed, and applied masking. */
-        match node.value {
+        match window.value {
             Window::Layout(ref mut layout) => {
                 layout.arrange(rect, &mut cells);
             },
@@ -140,13 +148,15 @@ impl WindowTree {
         }
 
         let mut i = 0;
-        let mut child = self.tree.get(index).child();
+        child = parent.child();
 
         while let Some(id) = child {
-            node = self.tree.get_mut(id);
+            let node = masktree.get(id);
+            let window = self.tree.get_mut(node.value);
+
             child = node.next_sibling();
 
-            match node.value {
+            match window.value {
                 Window::Client(ref mut client) => {
                     match &cells[i] {
                         Cell::Hide => {
@@ -163,19 +173,17 @@ impl WindowTree {
                     }
                 },
                 Window::Layout(_) => {
-                    let id = node.index();
-
                     /* node is dropped here via lexical scoping. */
                     match &cells[i] {
                         Cell::Hide => {
-                            self.show(adapter, id, false);
+                            self.show(adapter, node.value, false);
                         },
                         Cell::Show(r) => {
-                            self.arrange(adapter, id, r)
+                            self.arrange_recursive(adapter, masktree, id, r)
                         },
                         Cell::Focus(r) => {
                             self.focus = id;
-                            self.arrange(adapter, id, r)
+                            self.arrange_recursive(adapter, masktree, id, r)
                         },
                     }
                 },
@@ -186,14 +194,85 @@ impl WindowTree {
     }
 
     pub fn take(&mut self, mut other: WindowTree) {
-        let root = other.tree.root();
+        let root = other.root();
         let children: Vec<_> = other.tree.children(root)
             .collect();
 
-        let parent = self.tree.root();
+        let parent = self.root();
 
         for child in children.into_iter().rev() {
             self.tree.take(&mut other.tree, child, parent);
         }
+    }
+}
+
+pub struct MaskTree {
+    tree: tree::Tree<usize>,
+}
+
+impl MaskTree {
+    fn new<T>(adapter: &mut Adapter<T>, win: &mut WindowTree, mask: &HashMap<TagSetId, TagMask>, index: usize) -> MaskTree {
+        let mut tree = MaskTree {
+            tree: tree::Tree::new()
+        };
+
+        let root = tree.generate(adapter, win, mask, index);
+        tree.tree.set_root(root);
+
+        tree
+    }
+
+    fn root(&self) -> Option<usize> {
+        self.tree.root()
+    }
+
+    fn generate<T>(&mut self, adapter: &mut Adapter<T>, tree: &mut WindowTree, mask: &HashMap<TagSetId, TagMask>, from: usize) -> Option<usize> {
+        /* construct a tree, bottom up, such that any nodes of the tree
+         * which are masked out are excluded from the final product */
+        let mut node = tree.tree.get_mut(from);
+
+        match node.value {
+            Window::Client(ref mut client) => {
+                if client.mask(mask) {
+                    println!("Unhidden window: {:?}", client.window());
+                    Some(self.tree.orphan(from))
+                } else {
+                    println!("Hidden window: {:?}", client.window());
+                    client.show(adapter, false);
+                    None
+                }
+            },
+            Window::Layout(_) => {
+                let mut children = false;
+                let parent = self.tree.orphan(from);
+                let mut child = node.child();
+
+                while let Some(id) = child {
+                    node = tree.tree.get_mut(id);
+                    child = node.next_sibling();
+
+                    match self.generate(adapter, tree, mask, id) {
+                        Some(orphan) => {
+                            children = true;
+                            self.tree.adopt(parent, orphan);
+                        },
+                        None => {},
+                    }
+                }
+
+                if children {
+                    Some(parent)
+                } else {
+                    self.tree.remove(parent);
+                    None
+                }
+
+            },
+        }
+    }
+
+    #[inline]
+    fn get(&self, index: usize) -> &tree::TreeNode<usize> {
+        self.tree.get(index)
     }
 }

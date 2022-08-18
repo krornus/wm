@@ -50,52 +50,74 @@ impl<T> TreeNode<T> {
 }
 
 pub struct Tree<T> {
-    root: usize,
+    root: Option<usize>,
     slab: slab::Slab<TreeNode<T>>,
 }
 
 impl<T> Tree<T> {
-    pub fn new(value: T) -> Self {
-        let mut slab = slab::Slab::new();
-
-        let index = slab.vacant_key();
-        let node = TreeNode::new(index, value);
-        slab.insert(node);
+    pub fn new() -> Self {
+        let slab = slab::Slab::new();
 
         Tree {
-            root: index,
+            root: None,
             slab: slab,
         }
     }
 
-    pub fn root(&self) -> usize {
+    pub fn set_root(&mut self, index: Option<usize>) {
+        self.root = index;
+    }
+
+    pub fn swap_root(&mut self, value: T) -> Option<T> {
+        let index = self.slab.vacant_key();
+        let node = TreeNode::new(index, value);
+        self.slab.insert(node);
+
+        let swap = match self.root {
+            Some(i) => Some(self.slab.remove(i).value),
+            None => None,
+        };
+
+        self.root = Some(index);
+
+        swap
+    }
+
+    pub fn root(&self) -> Option<usize> {
         self.root
     }
 
-    pub fn insert(&mut self, index: usize, value: T) -> usize {
+    pub fn orphan(&mut self, value: T) -> usize {
         let insert_index = self.slab.vacant_key();
-        let mut node = TreeNode::new(insert_index, value);
+        let node = TreeNode::new(insert_index, value);
+        self.slab.insert(node)
+    }
 
+    pub fn adopt(&mut self, index: usize, child: usize) {
         /* set the parent index in the new child */
         let parent = self.get_mut(index);
-        node.parent = Some(index.clone());
-
-        let child_index = parent.child.replace(insert_index);
+        let child_index = parent.child.replace(child);
 
         /* replace the index of the child with the new key,
          * and set the child's sibing to the new key. */
         match child_index {
             Some(i) => {
                 let child = self.get_mut(i);
-                child.left = Some(index.clone());
+                child.left = Some(index);
             },
             _ => {
             }
         }
 
+        let mut node = self.get_mut(child);
+        node.parent = Some(index);
         node.right = child_index;
+    }
 
-        self.slab.insert(node)
+    pub fn insert(&mut self, index: usize, value: T) -> usize {
+        let child = self.orphan(value);
+        self.adopt(index, child);
+        child
     }
 
     #[inline]
@@ -126,9 +148,10 @@ impl<T> Tree<T> {
         let children: Vec<_> = self.children(index).collect();
 
         let root = self.slab.try_remove(index)?;
-        let mut tree = Tree::new(root.value);
+        let mut tree = Tree::new();
+        tree.swap_root(root.value);
 
-        let parent = tree.root;
+        let parent = tree.root.unwrap();
 
         for child in children.into_iter().rev() {
             tree.take(self, child, parent);

@@ -13,7 +13,7 @@ mod layout;
 mod rect;
 mod error;
 
-use crate::tag::{Tag, Tags, TagSet, TagMask, TagSetId};
+use crate::tag::{Tag, Tags, TagSet, TagSetId};
 use crate::display::ViewId;
 
 #[derive(Copy, Clone)]
@@ -96,8 +96,11 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
 
                 wm.flush()?;
             },
-            wm::Event::MonitorResize(id) => {
-                wm.arrange(id)?;
+            wm::Event::MonitorResize(view) => {
+                wm.arrange(view, tags.masks())?;
+            },
+            wm::Event::ClientCreate(view, _) => {
+                wm.arrange(view, tags.masks())?;
             },
             wm::Event::UserEvent(Event::Spawn(args)) => {
                 wm.spawn(args);
@@ -108,6 +111,7 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
                     mask.clear();
                     mask.set(Tag::On(tag));
                 });
+                wm.arrange(view, tags.masks())?;
             },
             wm::Event::UserEvent(Event::Exit) => {
                 break Ok(());

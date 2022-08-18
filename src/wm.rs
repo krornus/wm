@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::error::Error;
 use crate::rect::Rect;
 use crate::kb::{Keys, Binding};
-use crate::tag::Tags;
+use crate::tag::{TagSetId, TagMask, Tags};
 use crate::client::Client;
 use crate::display::{ViewId, Display};
 
@@ -63,6 +63,7 @@ pub enum Event<T> {
     MonitorResize(ViewId),
     MonitorDisconnect(ViewId),
     MonitorPrimary(ViewId),
+    ClientCreate(ViewId, usize),
     UserEvent(T),
 }
 
@@ -185,12 +186,12 @@ impl<T: Copy> WindowManager<T> {
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let focus = self.display.focus();
-                let value = self.keys.get(focus, e.state(), e.detail() as Keycode, true);
+                let value = self.keys.get(Some(focus), e.state(), e.detail() as Keycode, true);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
             xcb::Event::X(xcb::x::Event::KeyRelease(ref e)) => {
                 let focus = self.display.focus();
-                let value = self.keys.get(focus, e.state(), e.detail() as Keycode, false);
+                let value = self.keys.get(Some(focus), e.state(), e.detail() as Keycode, false);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
@@ -207,12 +208,14 @@ impl<T: Copy> WindowManager<T> {
             },
             xcb::Event::RandR(xcb::randr::Event::ScreenChangeNotify(_)) => {
                 self.display.update(&mut self.adapter)?;
-                Ok(Event::Empty)
+                Ok(self.adapter.pop().unwrap_or(Event::Empty))
             },
             xcb::Event::X(xcb::x::Event::ConfigureNotify(ref e)) => {
                 if self.root == e.window() {
+                    /* this forces randr to update, flushing out any ScreenChangeNotifys */
                     self.display.configure(&mut self.adapter, e.window())?;
                 }
+
                 Ok(Event::Empty)
             }
             _ => {
@@ -262,10 +265,10 @@ impl<T: Copy> WindowManager<T> {
         &mut self.display
     }
 
-    pub fn arrange(&mut self, id: ViewId) -> Result<(), Error> {
+    pub fn arrange(&mut self, id: ViewId, mask: &HashMap<TagSetId, TagMask>) -> Result<(), Error> {
         let view = self.display.get_view_mut(id).ok_or(Error::MissingView)?;
 
-        view.arrange(&mut self.adapter);
+        view.arrange(&mut self.adapter, mask);
         self.adapter.check()?;
 
         Ok(())
@@ -325,14 +328,9 @@ impl<T: Copy> WindowManager<T> {
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
         let client = Client::new(e.window(), Rect::new(0, 0, 0, 0));
-        self.display.add_client(&mut self.adapter, client);
+        let id = self.display.add_client(client);
 
-        match self.display.get_client_mut(e.window()) {
-            Some(c) => c.show(&mut self.adapter, true),
-            None => {},
-        }
-
-        Ok(Event::Empty)
+        Ok(Event::ClientCreate(self.display.focus(), id))
     }
 
     /// handle the UnmapNotifyEvent, which notifies us that a window has been unmapped (hidden)
