@@ -15,18 +15,28 @@ mod error;
 
 #[derive(Copy, Clone)]
 enum Event {
+    Exit,
     Spawn(&'static str),
 }
 
 fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
-
-    wm.bind(&kb::Binding{
+    wm.bind(&kb::Binding {
         view: None,
         mask: x::KeyButMask::MOD4,
         keysym: kb::keysym::Return,
         press: kb::Press::Press,
-        value: Event::Spawn("xterm /bin/zsh"),
+        value: Event::Spawn("sakura"),
     })?;
+
+    wm.bind(&kb::Binding {
+        view: None,
+        mask: x::KeyButMask::MOD4,
+        keysym: kb::keysym::q,
+        press: kb::Press::Press,
+        value: Event::Exit,
+    })?;
+
+    wm.flush()?;
 
     loop {
         match wm.next()? {
@@ -40,11 +50,13 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
             wm::Event::UserEvent(Event::Spawn(args)) => {
                 wm.spawn(args);
             },
+            wm::Event::UserEvent(Event::Exit) => {
+                break Ok(());
+            },
             _ => {
             },
         }
     }
-
 }
 
 fn main() {

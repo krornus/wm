@@ -31,16 +31,17 @@ impl<T> Adapter<T> {
 
     pub fn request<R>(&mut self, request: &R)
     where
-        R: xcb::RequestWithoutReply,
+        R: xcb::RequestWithoutReply + std::fmt::Debug,
     {
-        let cookie = self.conn.send_request_checked(request);
+        let cookie = self.conn.send_request_checked(dbg!(request));
         self.pending.push(cookie);
     }
 
     pub fn check(&mut self) -> Result<bool, Error> {
         let ok = self.pending.len() > 0;
+
         for c in self.pending.drain(..) {
-            self.conn.check_request(c)?;
+            self.conn.check_request(dbg!(c))?;
         }
 
         Ok(ok)
@@ -90,9 +91,8 @@ impl<T: Copy> WindowManager<T> {
             .ok_or(Error::MissingScreen)?;
 
         let roots: Vec<_> = setup.roots().map(|x| x.root()).collect();
-        dbg!(roots);
-
         let root = screen.root();
+
         conn.send_and_check_request(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
@@ -158,6 +158,10 @@ impl<T: Copy> WindowManager<T> {
 }
 
 impl<T: Copy> WindowManager<T> {
+	pub fn flush(&mut self) -> Result<bool, Error> {
+		self.adapter.check()
+	}
+
     pub fn next(&mut self) -> Result<Event<T>, Error> {
         let event = self.adapter.conn.wait_for_event()?;
 
@@ -181,8 +185,8 @@ impl<T: Copy> WindowManager<T> {
 
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                let focus = dbg!(self.display.focus());
                 dbg!(&e);
+                let focus = self.display.focus();
                 let value = self.keys.get(focus, e.state(), e.detail() as Keycode);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
@@ -203,7 +207,9 @@ impl<T: Copy> WindowManager<T> {
                 Ok(Event::Empty)
             },
             xcb::Event::X(xcb::x::Event::ConfigureNotify(ref e)) => {
-                self.display.configure(&mut self.adapter, e.window())?;
+                if self.root == e.window() {
+                    self.display.configure(&mut self.adapter, e.window())?;
+                }
                 Ok(Event::Empty)
             }
             _ => {

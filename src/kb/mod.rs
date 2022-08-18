@@ -93,8 +93,8 @@ impl KeyMap {
                      *   keycodes[8][keycodes_per_modifier]
                      * by dividing the index by 8, we get the associated
                      * modifier, shifting it gives us the mask. */
-                    let m =
-                        x::KeyButMask::from_bits(1 << (i / 8)).unwrap_or(x::KeyButMask::empty());
+                    let m = x::KeyButMask::from_bits(1 << (i / 8))
+                        .unwrap_or(x::KeyButMask::empty());
 
                     return Ok(m);
                 }
@@ -215,7 +215,7 @@ impl<T: Copy> Keys<T> {
     fn grab(&self, adapter: &mut Adapter<T>, modifiers: x::KeyButMask, keycode: Keycode) {
         let m = x::ModMask::from_bits(modifiers.bits()).unwrap();
 
-        println!("grab: [{:?} + {:?}]", modifiers, keycode);
+        println!("grab: {:?}: [{:?} + {:?}]", self.root, modifiers, keycode);
 
         adapter.request(&x::GrabKey {
             owner_events: true,
@@ -247,6 +247,7 @@ impl<T: Copy> Keys<T> {
     }
 
     pub fn get(&self, focus: Option<ViewId>, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
+        dbg!(&focus);
         m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
         self.bindings.get(&(m, k)).and_then(|b| b.get(focus))
     }
