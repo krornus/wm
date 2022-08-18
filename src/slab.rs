@@ -2,7 +2,7 @@ use std::fmt;
 use slab;
 
 /// Generational index into the slab
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
 pub struct SlabIndex {
     key: usize,
     generation: usize,

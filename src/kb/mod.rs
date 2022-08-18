@@ -112,6 +112,16 @@ pub enum Press {
     Both,
 }
 
+impl Press {
+    fn ignored(&self, press: bool) -> bool {
+        match self {
+            Press::Press => !press,
+            Press::Release => press,
+            Press::Both => false,
+        }
+    }
+}
+
 pub struct Binding<T: Copy> {
     pub view: Option<ViewId>,
     pub mask: x::KeyButMask,
@@ -169,17 +179,23 @@ impl<T: Copy> BindingSet<T> {
         }
     }
 
-    fn get(&self, view: Option<ViewId>) -> Option<T> {
+    fn get(&self, view: Option<ViewId>, press: bool) -> Option<T> {
         let at = view.and_then(|id| self.local.iter().position(|x| x.view == Some(id)));
 
-        match at {
+        let opt = match at {
             Some(i) => {
-                Some(self.local[i].value)
+                Some(&self.local[i])
             },
             None => {
-                self.global.as_ref().map(|b| b.value)
+                self.global.as_ref()
             }
-        }
+        };
+
+        opt.and_then(|x| if x.press.ignored(press) {
+            None
+        } else {
+            Some(x.value)
+        })
     }
 }
 
@@ -246,9 +262,8 @@ impl<T: Copy> Keys<T> {
         Ok(())
     }
 
-    pub fn get(&self, focus: Option<ViewId>, mut m: x::KeyButMask, k: Keycode) -> Option<T> {
-        dbg!(&focus);
+    pub fn get(&self, focus: Option<ViewId>, mut m: x::KeyButMask, k: Keycode, press: bool) -> Option<T> {
         m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
-        self.bindings.get(&(m, k)).and_then(|b| b.get(focus))
+        self.bindings.get(&(m, k)).and_then(|b| b.get(focus, press))
     }
 }

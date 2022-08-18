@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::rect::Rect;
+use crate::tag::{Tags, TagMask};
 use crate::slab::{SlabIndex, Slab};
 use crate::error::Error;
 use crate::wm::{Adapter, Event};
@@ -146,9 +147,10 @@ impl View {
     }
 
     #[inline]
-    pub fn add_client<T>(&mut self, adapter: &mut Adapter<T>, client: Client) {
-        self.window.insert(self.focus, Window::Client(client));
+    pub fn add_client<T>(&mut self, adapter: &mut Adapter<T>, client: Client) -> usize {
+        let index = self.window.insert(self.focus, Window::Client(client));
         self.arrange(adapter);
+        index
     }
 }
 

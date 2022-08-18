@@ -90,7 +90,6 @@ impl<T: Copy> WindowManager<T> {
             .nth(main as usize)
             .ok_or(Error::MissingScreen)?;
 
-        let roots: Vec<_> = setup.roots().map(|x| x.root()).collect();
         let root = screen.root();
 
         conn.send_and_check_request(&x::ChangeWindowAttributes {
@@ -185,9 +184,13 @@ impl<T: Copy> WindowManager<T> {
 
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                dbg!(&e);
                 let focus = self.display.focus();
-                let value = self.keys.get(focus, e.state(), e.detail() as Keycode);
+                let value = self.keys.get(focus, e.state(), e.detail() as Keycode, true);
+                Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
+            },
+            xcb::Event::X(xcb::x::Event::KeyRelease(ref e)) => {
+                let focus = self.display.focus();
+                let value = self.keys.get(focus, e.state(), e.detail() as Keycode, false);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             },
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => {
@@ -253,6 +256,10 @@ impl<T: Copy> WindowManager<T> {
 
     pub fn display(&self) -> &Display {
         &self.display
+    }
+
+    pub fn display_mut(&mut self) -> &mut Display {
+        &mut self.display
     }
 
     pub fn arrange(&mut self, id: ViewId) -> Result<(), Error> {

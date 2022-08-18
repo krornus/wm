@@ -112,6 +112,11 @@ impl WindowTree {
         let mut child = parent.child();
         let mut node;
 
+        /* TODO: implement masking. we need to know two things:
+         *  1) is this child visible within all masks
+         *  2) do any sub layouts actuall contain children?
+         *     if not -- they shouldn't be pushed.
+         */
         while let Some(i) = child {
             node = self.tree.get(i);
             child = node.next_sibling();
@@ -125,6 +130,7 @@ impl WindowTree {
 
         let mut node = self.tree.get_mut(index);
 
+        /* TODO: by this time, we must have recursed, and applied masking. */
         match node.value {
             Window::Layout(ref mut layout) => {
                 layout.arrange(rect, &mut cells);
