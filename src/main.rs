@@ -19,7 +19,8 @@ use crate::display::ViewId;
 #[derive(Copy, Clone)]
 enum Event {
     Exit,
-    WorkspaceView(ViewId, TagSetId, usize),
+    ViewSet(ViewId, TagSetId, Tag),
+    ViewUpdate(ViewId, TagSetId, Tag),
     Spawn(&'static str),
 }
 
@@ -28,7 +29,7 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
 
     wm.bind(&kb::Binding {
         view: None,
-        mask: x::KeyButMask::MOD4,
+        mask: Some(x::KeyButMask::MOD4),
         keysym: kb::keysym::Return,
         press: kb::Press::Press,
         value: Event::Spawn("sakura"),
@@ -36,7 +37,7 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
 
     wm.bind(&kb::Binding {
         view: None,
-        mask: x::KeyButMask::MOD4,
+        mask: Some(x::KeyButMask::MOD4),
         keysym: kb::keysym::q,
         press: kb::Press::Press,
         value: Event::Exit,
@@ -49,6 +50,7 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
             wm::Event::MonitorConnect(id) => {
                 let view = wm.display_mut().get_view_mut(id).unwrap();
                 let rect = view.rect();
+
                 println!("connect monitor: {}", rect);
 
                 let tagset = TagSet::new(vec!["a", "s", "d", "f", "g"]);
@@ -56,43 +58,37 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
 
                 wm.bind(&kb::Binding {
                     view: Some(id),
-                    mask: x::KeyButMask::MOD4,
+                    mask: Some(x::KeyButMask::MOD4),
                     keysym: kb::keysym::a,
                     press: kb::Press::Press,
-                    value: Event::WorkspaceView(id, tagid, 0),
+                    value: Event::ViewSet(id, tagid, Tag::On(0)),
                 })?;
 
                 wm.bind(&kb::Binding {
                     view: Some(id),
-                    mask: x::KeyButMask::MOD4,
+                    mask: Some(x::KeyButMask::MOD4),
                     keysym: kb::keysym::s,
                     press: kb::Press::Press,
-                    value: Event::WorkspaceView(id, tagid, 1),
+                    value: Event::ViewSet(id, tagid, Tag::On(1)),
+                })?;
+
+
+                wm.bind(&kb::Binding {
+                    view: Some(id),
+                    mask: Some(x::KeyButMask::MOD4 | x::KeyButMask::SHIFT),
+                    keysym: kb::keysym::a,
+                    press: kb::Press::Press,
+                    value: Event::ViewUpdate(id, tagid, Tag::Toggle(0)),
                 })?;
 
                 wm.bind(&kb::Binding {
                     view: Some(id),
-                    mask: x::KeyButMask::MOD4,
-                    keysym: kb::keysym::d,
+                    mask: Some(x::KeyButMask::MOD4 | x::KeyButMask::SHIFT),
+                    keysym: kb::keysym::s,
                     press: kb::Press::Press,
-                    value: Event::WorkspaceView(id, tagid, 2),
+                    value: Event::ViewUpdate(id, tagid, Tag::Toggle(1)),
                 })?;
 
-                wm.bind(&kb::Binding {
-                    view: Some(id),
-                    mask: x::KeyButMask::MOD4,
-                    keysym: kb::keysym::f,
-                    press: kb::Press::Press,
-                    value: Event::WorkspaceView(id, tagid, 3),
-                })?;
-
-                wm.bind(&kb::Binding {
-                    view: Some(id),
-                    mask: x::KeyButMask::MOD4,
-                    keysym: kb::keysym::g,
-                    press: kb::Press::Press,
-                    value: Event::WorkspaceView(id, tagid, 4),
-                })?;
 
                 wm.flush()?;
             },
@@ -105,12 +101,21 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
             wm::Event::UserEvent(Event::Spawn(args)) => {
                 wm.spawn(args);
             },
-            wm::Event::UserEvent(Event::WorkspaceView(view, tagset, tag)) => {
-                println!("viewtag: {:?}", tag);
+            wm::Event::UserEvent(Event::ViewSet(view, tagset, tag)) => {
+                println!("set: {:?}", tag);
                 tags.mask_mut(tagset).map(|mask| {
                     mask.clear();
-                    mask.set(Tag::On(tag));
+                    mask.set(tag);
                 });
+
+                wm.arrange(view, tags.masks())?;
+            },
+            wm::Event::UserEvent(Event::ViewUpdate(view, tagset, tag)) => {
+                println!("update: {:?}", tag);
+                tags.mask_mut(tagset).map(|mask| {
+                    mask.set(tag);
+                });
+
                 wm.arrange(view, tags.masks())?;
             },
             wm::Event::UserEvent(Event::Exit) => {
