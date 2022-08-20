@@ -3,12 +3,25 @@ use std::collections::HashMap;
 use crate::error::Error;
 use crate::wm::Adapter;
 use crate::display::ViewId;
+use crate::keysym;
 
 use xcb::x::{self, Keysym, Keycode};
+use bitflags::bitflags;
 
-pub const ANY: x::KeyButMask = unsafe { x::KeyButMask::from_bits_unchecked(x::ModMask::ANY.bits()) };
+bitflags! {
+    pub struct Modifier: u32 {
+        const SHIFT = 0x00000001;
+        const LOCK = 0x00000002;
+        const CONTROL = 0x00000004;
+        const MOD1 = 0x00000008;
+        const MOD2 = 0x00000010;
+        const MOD3 = 0x00000020;
+        const MOD4 = 0x00000040;
+        const MOD5 = 0x00000080;
+        const ANY = 0x00008000;
+    }
+}
 
-pub mod keysym;
 
 pub struct KeyMap {
     min: u32,
@@ -87,7 +100,7 @@ impl KeyMap {
         }
     }
 
-    pub fn mask(&mut self, keysym: Keysym) -> Result<x::KeyButMask, Error> {
+    pub fn mask(&mut self, keysym: Keysym) -> Result<Modifier, Error> {
         for target in self.keycodes(keysym) {
             for (i, keycode) in self.modmap.keycodes().iter().enumerate() {
                 if target == *keycode {
@@ -95,15 +108,12 @@ impl KeyMap {
                      *   keycodes[8][keycodes_per_modifier]
                      * by dividing the index by 8, we get the associated
                      * modifier, shifting it gives us the mask. */
-                    let m = x::KeyButMask::from_bits(1 << (i / 8))
-                        .unwrap_or(x::KeyButMask::empty());
-
-                    return Ok(m);
+                    return unsafe { Ok(Modifier::from_bits_unchecked(1 << (i / 8))) };
                 }
             }
         }
 
-        Ok(x::KeyButMask::empty())
+        Ok(Modifier::empty())
     }
 }
 
@@ -114,19 +124,9 @@ pub enum Press {
     Both,
 }
 
-impl Press {
-    fn ignored(&self, press: bool) -> bool {
-        match self {
-            Press::Press => !press,
-            Press::Release => press,
-            Press::Both => false,
-        }
-    }
-}
-
 pub struct Binding<T: Copy> {
     pub view: Option<ViewId>,
-    pub mask: Option<x::KeyButMask>,
+    pub mask: Modifier,
     pub keysym: Keysym,
     pub press: Press,
     pub value: T,
@@ -196,10 +196,10 @@ impl<T: Copy> BindingSet<T> {
 pub struct Keys<T: Copy> {
     root: x::Window,
     keymap: KeyMap,
-    num_lock: x::KeyButMask,
-    caps_lock: x::KeyButMask,
-    scroll_lock: x::KeyButMask,
-    bindings: HashMap<(Option<x::KeyButMask>, Keycode, bool), BindingSet<T>>,
+    num_lock: Modifier,
+    caps_lock: Modifier,
+    scroll_lock: Modifier,
+    bindings: HashMap<(Modifier, Keycode, bool), BindingSet<T>>,
 }
 
 impl<T: Copy> Keys<T> {
@@ -222,9 +222,8 @@ impl<T: Copy> Keys<T> {
     }
 
     #[inline]
-    fn grab(&self, adapter: &mut Adapter<T>, modifiers: x::KeyButMask, keycode: Keycode) {
+    fn grab(&self, adapter: &mut Adapter<T>, modifiers: Modifier, keycode: Keycode) {
         let m = unsafe { x::ModMask::from_bits_unchecked(modifiers.bits()) };
-
         println!("grab: {:?}: [{:?} + {:?}]", self.root, m, keycode);
 
         adapter.request(&x::GrabKey {
@@ -263,18 +262,18 @@ impl<T: Copy> Keys<T> {
 
 
             match binding.mask {
-                None => {
-                    self.grab(adapter, ANY, kc);
+                Modifier::ANY => {
+                    self.grab(adapter, Modifier::ANY, kc);
                 },
-                Some(m) => {
-                    self.grab(adapter, m, kc);
-                    self.grab(adapter, m | self.num_lock, kc);
-                    self.grab(adapter, m | self.caps_lock, kc);
-                    self.grab(adapter, m | self.scroll_lock, kc);
-                    self.grab(adapter, m | self.caps_lock | self.num_lock, kc);
-                    self.grab(adapter, m | self.scroll_lock | self.num_lock, kc);
-                    self.grab(adapter, m | self.scroll_lock | self.caps_lock, kc);
-                    self.grab(adapter, m | self.num_lock | self.scroll_lock | self.caps_lock, kc);
+                _ => {
+                    self.grab(adapter, binding.mask, kc);
+                    self.grab(adapter, binding.mask | self.num_lock, kc);
+                    self.grab(adapter, binding.mask | self.caps_lock, kc);
+                    self.grab(adapter, binding.mask | self.scroll_lock, kc);
+                    self.grab(adapter, binding.mask | self.caps_lock | self.num_lock, kc);
+                    self.grab(adapter, binding.mask | self.scroll_lock | self.num_lock, kc);
+                    self.grab(adapter, binding.mask | self.scroll_lock | self.caps_lock, kc);
+                    self.grab(adapter, binding.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
                 },
             }
         }
@@ -282,12 +281,13 @@ impl<T: Copy> Keys<T> {
         Ok(())
     }
 
-    pub fn get(&self, focus: Option<ViewId>, mut m: x::KeyButMask, k: Keycode, press: bool) -> Option<T> {
-        m.remove(self.num_lock | self.caps_lock | self.scroll_lock);
+    pub fn get(&self, focus: Option<ViewId>, mask: x::KeyButMask, k: Keycode, press: bool) -> Option<T> {
+        let mut modifiers = unsafe { Modifier::from_bits_unchecked(mask.bits()) };
+        modifiers.remove(self.num_lock | self.caps_lock | self.scroll_lock);
 
         self.bindings
-            .get(&(Some(m), k, press))
-            .or_else(|| self.bindings.get(&(None, k, press)))
+            .get(&(modifiers, k, press))
+            .or_else(|| self.bindings.get(&(Modifier::ANY, k, press)))
             .and_then(|b| b.get(focus))
     }
 }

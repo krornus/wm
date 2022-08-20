@@ -115,7 +115,7 @@ pub * constd algorithmically: Keysym, = even; if it is not listed here. Therefor
 #![allow(non_upper_case_globals)]
 #![allow(dead_code)]
 
-use crate::kb::Keysym;
+use xcb::x::Keysym;
 
 pub const VoidSymbol: Keysym = 0xffffff; /* Void symbol */
 

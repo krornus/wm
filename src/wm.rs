@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::error::Error;
 use crate::rect::Rect;
-use crate::kb::{Keys, Binding};
+use crate::keyboard::{Keys, Binding};
 use crate::tag::{TagSetId, TagMask, Tags};
 use crate::client::Client;
 use crate::display::{ViewId, Display};
@@ -33,7 +33,7 @@ impl<T> Adapter<T> {
     where
         R: xcb::RequestWithoutReply + std::fmt::Debug,
     {
-        let cookie = self.conn.send_request_checked(dbg!(request));
+        let cookie = self.conn.send_request_checked(request);
         self.pending.push(cookie);
     }
 
@@ -41,7 +41,7 @@ impl<T> Adapter<T> {
         let ok = self.pending.len() > 0;
 
         for c in self.pending.drain(..) {
-            self.conn.check_request(dbg!(c))?;
+            self.conn.check_request(c)?;
         }
 
         Ok(ok)

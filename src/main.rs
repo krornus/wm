@@ -1,17 +1,18 @@
 #![allow(dead_code)]
 use xcb::x;
 
-mod wm;
-mod kb;
-mod tag;
-mod slab;
-mod tree;
 mod client;
 mod display;
-mod window;
+mod error;
+mod keyboard;
+mod keysym;
 mod layout;
 mod rect;
-mod error;
+mod slab;
+mod tag;
+mod tree;
+mod window;
+mod wm;
 
 use crate::tag::{Tag, Tags, TagSet, TagSetId};
 use crate::display::ViewId;
@@ -27,19 +28,19 @@ enum Event {
 fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
     let mut tags = Tags::new();
 
-    wm.bind(&kb::Binding {
+    wm.bind(&keyboard::Binding {
         view: None,
-        mask: Some(x::KeyButMask::MOD4),
-        keysym: kb::keysym::Return,
-        press: kb::Press::Press,
+        mask: keyboard::Modifier::MOD4,
+        keysym: keysym::Return,
+        press: keyboard::Press::Press,
         value: Event::Spawn("sakura"),
     })?;
 
-    wm.bind(&kb::Binding {
+    wm.bind(&keyboard::Binding {
         view: None,
-        mask: Some(x::KeyButMask::MOD4),
-        keysym: kb::keysym::q,
-        press: kb::Press::Press,
+        mask: keyboard::Modifier::MOD4,
+        keysym: keysym::q,
+        press: keyboard::Press::Press,
         value: Event::Exit,
     })?;
 
@@ -56,36 +57,36 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
                 let tagset = TagSet::new(vec!["a", "s", "d", "f", "g"]);
                 let tagid = tags.insert(tagset);
 
-                wm.bind(&kb::Binding {
+                wm.bind(&keyboard::Binding {
                     view: Some(id),
-                    mask: Some(x::KeyButMask::MOD4),
-                    keysym: kb::keysym::a,
-                    press: kb::Press::Press,
+                    mask: keyboard::Modifier::MOD4,
+                    keysym: keysym::a,
+                    press: keyboard::Press::Press,
                     value: Event::ViewSet(id, tagid, Tag::On(0)),
                 })?;
 
-                wm.bind(&kb::Binding {
+                wm.bind(&keyboard::Binding {
                     view: Some(id),
-                    mask: Some(x::KeyButMask::MOD4),
-                    keysym: kb::keysym::s,
-                    press: kb::Press::Press,
+                    mask: keyboard::Modifier::MOD4,
+                    keysym: keysym::s,
+                    press: keyboard::Press::Press,
                     value: Event::ViewSet(id, tagid, Tag::On(1)),
                 })?;
 
 
-                wm.bind(&kb::Binding {
+                wm.bind(&keyboard::Binding {
                     view: Some(id),
-                    mask: Some(x::KeyButMask::MOD4 | x::KeyButMask::SHIFT),
-                    keysym: kb::keysym::a,
-                    press: kb::Press::Press,
+                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT,
+                    keysym: keysym::a,
+                    press: keyboard::Press::Press,
                     value: Event::ViewUpdate(id, tagid, Tag::Toggle(0)),
                 })?;
 
-                wm.bind(&kb::Binding {
+                wm.bind(&keyboard::Binding {
                     view: Some(id),
-                    mask: Some(x::KeyButMask::MOD4 | x::KeyButMask::SHIFT),
-                    keysym: kb::keysym::s,
-                    press: kb::Press::Press,
+                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT,
+                    keysym: keysym::s,
+                    press: keyboard::Press::Press,
                     value: Event::ViewUpdate(id, tagid, Tag::Toggle(1)),
                 })?;
 
