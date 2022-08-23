@@ -1,6 +1,7 @@
-use crate::rect::{Rect, Cut, Split};
 use crate::client::Client;
+use crate::rect::{Cut, Rect, Split};
 
+#[derive(Debug)]
 pub enum Cell {
     Hide,
     Show(Rect),
@@ -26,11 +27,11 @@ pub trait Layout {
 }
 
 #[derive(Debug, Clone)]
-pub struct Monacle { }
+pub struct Monacle {}
 
 impl Monacle {
     pub fn new() -> Self {
-        Monacle { }
+        Monacle {}
     }
 }
 
@@ -38,7 +39,7 @@ impl Layout for Monacle {
     fn arrange(&mut self, scope: &Rect, cells: &mut [Cell]) {
         for i in 0..cells.len() {
             match &cells[i] {
-                Cell::Hide => {},
+                Cell::Hide => {}
                 Cell::Show(_) => cells[i] = Cell::Hide,
                 Cell::Focus(_) => cells[i] = Cell::Focus(*scope),
             }
@@ -114,9 +115,7 @@ impl Layout for LeftMaster {
                     cells[index] = Cell::Show(window);
                     index += 1;
                 }
-
             }
         }
-
     }
 }

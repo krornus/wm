@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::error::Error;
-use crate::wm::Adapter;
 use crate::display::ViewId;
+use crate::error::Error;
 use crate::keysym;
+use crate::wm::Adapter;
 
-use xcb::x::{self, Keysym, Keycode};
 use bitflags::bitflags;
+use xcb::x::{self, Keycode, Keysym};
 
 bitflags! {
     pub struct Modifier: u32 {
@@ -21,7 +21,6 @@ bitflags! {
         const ANY = 0x00008000;
     }
 }
-
 
 pub struct KeyMap {
     min: u32,
@@ -51,7 +50,7 @@ impl<'a> Iterator for KeycodeIterator<'a> {
                 /* seek to next keycode */
                 self.index = match self.index % self.per {
                     0 => self.index,
-                    r => self.index + (self.per - r)
+                    r => self.index + (self.per - r),
                 };
 
                 /* return keycode */
@@ -74,8 +73,7 @@ impl KeyMap {
             count: max - min + 1,
         });
 
-        let mod_cookie = conn.send_request(&x::GetModifierMapping {
-        });
+        let mod_cookie = conn.send_request(&x::GetModifierMapping {});
 
         let keymap = conn.wait_for_reply(key_cookie)?;
         let modmap = conn.wait_for_reply(mod_cookie)?;
@@ -101,14 +99,18 @@ impl KeyMap {
     }
 
     pub fn mask(&mut self, keysym: Keysym) -> Result<Modifier, Error> {
-        for target in self.keycodes(keysym) {
-            for (i, keycode) in self.modmap.keycodes().iter().enumerate() {
-                if target == *keycode {
-                    /* reply.keycodes really returns a 2 dimensional array,
-                     *   keycodes[8][keycodes_per_modifier]
-                     * by dividing the index by 8, we get the associated
-                     * modifier, shifting it gives us the mask. */
-                    return unsafe { Ok(Modifier::from_bits_unchecked(1 << (i / 8))) };
+        /* taken from i3 */
+        let modmap = self.modmap.keycodes();
+        let keycodes_per_modifier = modmap.len() / 8;
+
+        for modifier in 0..8 {
+            for j in 0..keycodes_per_modifier {
+                let modcode = modmap[(modifier * keycodes_per_modifier) + j];
+
+                for keycode in self.keycodes(keysym) {
+                    if keycode == modcode {
+                        return unsafe { Ok(Modifier::from_bits_unchecked(1 << modifier)) };
+                    }
                 }
             }
         }
@@ -171,7 +173,7 @@ impl<T: Copy> BindingSet<T> {
             match at {
                 Some(i) => {
                     self.local[i] = value;
-                },
+                }
                 None => {
                     self.local.push(value);
                 }
@@ -183,12 +185,8 @@ impl<T: Copy> BindingSet<T> {
         let at = view.and_then(|id| self.local.iter().position(|x| x.view == Some(id)));
 
         match at {
-            Some(i) => {
-                Some(self.local[i].value)
-            },
-            None => {
-                self.global.as_ref().map(|x| x.value)
-            }
+            Some(i) => Some(self.local[i].value),
+            None => self.global.as_ref().map(|x| x.value),
         }
     }
 }
@@ -240,31 +238,34 @@ impl<T: Copy> Keys<T> {
         for kc in self.keymap.keycodes(binding.keysym) {
             match binding.press {
                 Press::Press => {
-                    self.bindings.entry((binding.mask, kc, true))
+                    self.bindings
+                        .entry((binding.mask, kc, true))
                         .or_insert(BindingSet::new())
                         .bind(&binding);
-                },
+                }
                 Press::Release => {
-                    self.bindings.entry((binding.mask, kc, false))
+                    self.bindings
+                        .entry((binding.mask, kc, false))
                         .or_insert(BindingSet::new())
                         .bind(&binding);
-                },
+                }
                 Press::Both => {
-                    self.bindings.entry((binding.mask, kc, true))
+                    self.bindings
+                        .entry((binding.mask, kc, true))
                         .or_insert(BindingSet::new())
                         .bind(&binding);
 
-                    self.bindings.entry((binding.mask, kc, false))
+                    self.bindings
+                        .entry((binding.mask, kc, false))
                         .or_insert(BindingSet::new())
                         .bind(&binding);
                 }
             }
 
-
             match binding.mask {
                 Modifier::ANY => {
                     self.grab(adapter, Modifier::ANY, kc);
-                },
+                }
                 _ => {
                     self.grab(adapter, binding.mask, kc);
                     self.grab(adapter, binding.mask | self.num_lock, kc);
@@ -272,16 +273,30 @@ impl<T: Copy> Keys<T> {
                     self.grab(adapter, binding.mask | self.scroll_lock, kc);
                     self.grab(adapter, binding.mask | self.caps_lock | self.num_lock, kc);
                     self.grab(adapter, binding.mask | self.scroll_lock | self.num_lock, kc);
-                    self.grab(adapter, binding.mask | self.scroll_lock | self.caps_lock, kc);
-                    self.grab(adapter, binding.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
-                },
+                    self.grab(
+                        adapter,
+                        binding.mask | self.scroll_lock | self.caps_lock,
+                        kc,
+                    );
+                    self.grab(
+                        adapter,
+                        binding.mask | self.num_lock | self.scroll_lock | self.caps_lock,
+                        kc,
+                    );
+                }
             }
         }
 
         Ok(())
     }
 
-    pub fn get(&self, focus: Option<ViewId>, mask: x::KeyButMask, k: Keycode, press: bool) -> Option<T> {
+    pub fn get(
+        &self,
+        focus: Option<ViewId>,
+        mask: x::KeyButMask,
+        k: Keycode,
+        press: bool,
+    ) -> Option<T> {
         let mut modifiers = unsafe { Modifier::from_bits_unchecked(mask.bits()) };
         modifiers.remove(self.num_lock | self.caps_lock | self.scroll_lock);
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::tag::{TagSetId, TagMask};
 use crate::rect::Rect;
+use crate::tag::{TagMask, TagSelection, TagSetId};
 use crate::wm::Adapter;
 
 use xcb::x;
@@ -86,18 +86,31 @@ impl Client {
         }
     }
 
-    pub fn mask(&self, mask: &HashMap<TagSetId, TagMask>) -> bool {
+    pub fn mask<'a, 'b>(&self, mask: &TagSelection<'a, 'b>) -> bool {
         for (id, mask) in mask.iter() {
-            match self.mask.get(id) {
-                Some(m) => if !mask.visible(m) {
-                    return false;
+            match self.mask.get(&id) {
+                Some(m) => {
+                    if !mask.visible(m) {
+                        return false;
+                    }
                 }
-                None => if !mask.visible(&TagMask::new()) {
-                    return false;
+                None => {
+                    if !mask.visible(&TagMask::new()) {
+                        return false;
+                    }
                 }
             }
         }
 
         true
+    }
+
+    pub fn set_mask(&mut self, mask: HashMap<TagSetId, TagMask>) {
+        self.mask = mask.clone()
+    }
+
+
+    pub fn get_mask_mut(&mut self, id: TagSetId) -> Option<&mut TagMask> {
+        self.mask.get_mut(&id)
     }
 }

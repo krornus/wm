@@ -104,9 +104,8 @@ impl<T> Tree<T> {
             Some(i) => {
                 let child = self.get_mut(i);
                 child.left = Some(index);
-            },
-            _ => {
             }
+            _ => {}
         }
 
         let mut node = self.get_mut(child);
@@ -122,14 +121,12 @@ impl<T> Tree<T> {
 
     #[inline]
     pub fn get(&self, index: usize) -> &TreeNode<T> {
-        self.slab.get(index)
-            .expect("index out of bounds")
+        self.slab.get(index).expect("index out of bounds")
     }
 
     #[inline]
     pub fn get_mut(&mut self, index: usize) -> &mut TreeNode<T> {
-        self.slab.get_mut(index)
-            .expect("index out of bounds")
+        self.slab.get_mut(index).expect("index out of bounds")
     }
 
     /// Take a sub-tree from one tree and place it in another
@@ -174,20 +171,16 @@ impl<T> Tree<T> {
     pub fn iter_at<'a>(&'a self, index: usize) -> IterAt<'a, T> {
         IterAt {
             tree: self,
-            stack: vec![index]
+            stack: vec![index],
         }
     }
 
-    pub fn iter(&self) -> Iter<'_, T> {
-        Iter {
-            iter: self.slab.iter()
-        }
+    pub fn iter(&self) -> slab::Iter<'_, TreeNode<T>> {
+        self.slab.iter()
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
-        IterMut {
-            iter: self.slab.iter_mut()
-        }
+    pub fn iter_mut<'a>(&'a mut self) -> slab::IterMut<'a, TreeNode<T>> {
+        self.slab.iter_mut()
     }
 }
 
@@ -225,32 +218,6 @@ impl<'a, T> Iterator for IterAt<'a, T> {
     }
 }
 
-pub struct Iter<'a, T> {
-    iter: slab::Iter<'a, TreeNode<T>>
-}
-
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (_, v) = self.iter.next()?;
-        Some(&v.value)
-    }
-}
-
-pub struct IterMut<'a, T> {
-    iter: slab::IterMut<'a, TreeNode<T>>
-}
-
-impl<'a, T> Iterator for IterMut<'a, T> {
-    type Item = &'a mut T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (_, v) = self.iter.next()?;
-        Some(&mut v.value)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +243,6 @@ mod tests {
         tree.insert(&four, 5).unwrap();
         tree.insert(&four, 6).unwrap();
         tree.insert(&four, 7).unwrap();
-
 
         tree.insert(&tree.root(), 8).unwrap();
 

@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
-use crate::rect::Rect;
-use crate::tag::{TagSetId, TagMask};
-use crate::slab::{SlabIndex, Slab};
-use crate::error::Error;
-use crate::wm::{Adapter, Event};
 use crate::client::Client;
-use crate::window::{Window, WindowTree};
+use crate::error::Error;
 use crate::layout::LeftMaster;
+use crate::rect::Rect;
+use crate::slab::{self, Slab, SlabIndex};
+use crate::tag::TagSelection;
+use crate::window::{Window, WindowTree};
+use crate::wm::{Adapter, Event};
 
-use xcb::{x, randr};
+use xcb::{randr, x};
 
 #[derive(Debug)]
 struct Monitor {
@@ -20,11 +20,12 @@ struct Monitor {
 }
 
 impl Monitor {
-    fn new(conn: &xcb::Connection, root: x::Window, info: &randr::MonitorInfo) -> Result<Self, Error> {
-
-        let cookie = conn.send_request(&x::GetAtomName {
-            atom: info.name(),
-        });
+    fn new(
+        conn: &xcb::Connection,
+        root: x::Window,
+        info: &randr::MonitorInfo,
+    ) -> Result<Self, Error> {
+        let cookie = conn.send_request(&x::GetAtomName { atom: info.name() });
 
         let reply = conn.wait_for_reply(cookie)?;
 
@@ -40,10 +41,11 @@ impl Monitor {
     }
 
     /// Get a vector of all monitors with active outputs
-    fn query_all(conn: &xcb::Connection, root: x::Window) -> Result<(Vec<Monitor>, Option<usize>), Error> {
-        let cookie = conn.send_request(&randr::GetScreenResourcesCurrent {
-            window: root,
-        });
+    fn query_all(
+        conn: &xcb::Connection,
+        root: x::Window,
+    ) -> Result<(Vec<Monitor>, Option<usize>), Error> {
+        let cookie = conn.send_request(&randr::GetScreenResourcesCurrent { window: root });
 
         let reply = conn.wait_for_reply(cookie)?;
 
@@ -98,21 +100,22 @@ impl Monitor {
 
                     mon.primary = false;
                     monitors.push(mon);
-                },
-                Err(_) => { }
+                }
+                Err(_) => {}
             }
         }
 
         match primary {
             Some(x) => {
                 monitors[x].primary = true;
-            },
-            None => if monitors.len() > 0 {
-                primary = Some(0);
-                monitors[0].primary = true;
+            }
+            None => {
+                if monitors.len() > 0 {
+                    primary = Some(0);
+                    monitors[0].primary = true;
+                }
             }
         }
-
 
         Ok((monitors, primary))
     }
@@ -121,7 +124,8 @@ impl Monitor {
 pub struct View {
     monitor: Monitor,
     window: WindowTree,
-    focus: usize,
+    pub root: usize,
+    pub focus: usize,
 }
 
 impl View {
@@ -132,13 +136,15 @@ impl View {
         View {
             monitor: monitor,
             window: window,
+            root: root,
             focus: root,
         }
     }
 
     #[inline]
-    pub fn arrange<T>(&mut self, adapter: &mut Adapter<T>, mask: &HashMap<TagSetId, TagMask>) {
-        self.window.arrange(adapter, mask, self.focus, &self.monitor.rect);
+    pub fn arrange<'a, 'b, T>(&mut self, adapter: &mut Adapter<T>, mask: &TagSelection<'a, 'b>) {
+        self.window
+            .arrange(adapter, mask, &self.monitor.rect);
     }
 
     #[inline]
@@ -147,22 +153,45 @@ impl View {
     }
 
     #[inline]
-    pub fn add_client(&mut self, client: Client) -> usize {
+    pub fn find(&self, window: x::Window) -> Option<usize> {
+        self.window.find(window)
+    }
+
+    #[inline]
+    pub fn add(&mut self, client: Client) -> usize {
         self.window.insert(self.focus, Window::Client(client))
+    }
+
+    #[inline]
+    pub fn get(&self, id: usize) -> Option<&Client> {
+        self.window.get(id)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut Client> {
+        self.window.get_mut(id)
     }
 }
 
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ViewId {
     index: SlabIndex,
+}
+
+impl From<SlabIndex> for ViewId {
+    fn from(i: SlabIndex) -> Self {
+        ViewId {
+            index: i
+        }
+    }
 }
 
 pub struct Display {
     root: x::Window,
     views: Slab<View>,
     primary: Option<ViewId>,
-    focus: Option<ViewId>,
+    pub focus: Option<ViewId>,
 }
 
 impl Display {
@@ -183,9 +212,7 @@ impl Display {
         let view = View::new(mon);
         let index = self.views.insert(view);
 
-        let id = ViewId {
-            index: index,
-        };
+        let id = ViewId { index: index };
 
         if self.focus.is_none() {
             self.focus = Some(id);
@@ -201,10 +228,14 @@ impl Display {
         }
     }
 
-    pub fn configure<T>(&mut self, adapter: &mut Adapter<T>, window: x::Window) -> Result<(), Error> {
-        let cookie = adapter.conn.send_request(&randr::GetScreenInfo {
-            window: window,
-        });
+    pub fn configure<T>(
+        &mut self,
+        adapter: &mut Adapter<T>,
+        window: x::Window,
+    ) -> Result<(), Error> {
+        let cookie = adapter
+            .conn
+            .send_request(&randr::GetScreenInfo { window: window });
 
         adapter.conn.wait_for_reply(cookie)?;
 
@@ -226,7 +257,6 @@ impl Display {
                         view.monitor.rect = mon.rect;
                         adapter.push(Event::MonitorResize(ViewId { index }));
                     }
-
 
                     /* optionally update the primary monitor to this one */
                     if primary == Some(i) {
@@ -254,37 +284,29 @@ impl Display {
         Ok(())
     }
 
-    pub fn add_client(&mut self, client: Client) -> usize {
-        let focus = self.focus();
+    pub fn add(&mut self, client: Client) -> usize {
+        /* TODO: support missing output */
+        let focus = self.focus.expect("no output available");
         let output = self.views.get_mut(&focus.index).unwrap();
 
-        output.add_client(client)
+        output.add(client)
     }
 
-    #[inline]
-    pub fn get_client(&self, window: x::Window) -> Option<&Client> {
+    pub fn iter(&self) -> slab::Iter<'_, View> {
         self.views.iter()
-            .find_map(|(_,output)| output.window.get_client(window))
     }
 
-    #[inline]
-    pub fn get_client_mut(&mut self, window: x::Window) -> Option<&mut Client> {
+    pub fn iter_mut(&mut self) -> slab::IterMut<'_, View> {
         self.views.iter_mut()
-            .find_map(|(_,output)| output.window.get_client_mut(window))
     }
 
     #[inline]
-    pub fn get_view(&self, id: ViewId) -> Option<&View> {
+    pub fn get(&self, id: ViewId) -> Option<&View> {
         self.views.get(&id.index)
     }
 
     #[inline]
-    pub fn get_view_mut(&mut self, id: ViewId) -> Option<&mut View> {
+    pub fn get_mut(&mut self, id: ViewId) -> Option<&mut View> {
         self.views.get_mut(&id.index)
-    }
-
-    pub fn focus(&self) -> ViewId {
-        /* TODO: handle cases with no focus (no monitor) */
-        self.focus.unwrap()
     }
 }

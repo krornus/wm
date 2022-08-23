@@ -1,5 +1,5 @@
-use std::fmt;
 use slab;
+use std::fmt;
 
 /// Generational index into the slab
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
@@ -45,21 +45,23 @@ impl<T> Slab<T> {
     }
 
     pub fn get(&self, index: &SlabIndex) -> Option<&T> {
-        self.slab.get(index.key).and_then(|e|
+        self.slab.get(index.key).and_then(|e| {
             if &index.generation == &e.generation {
                 Some(&e.value)
             } else {
                 None
-            })
+            }
+        })
     }
 
     pub fn get_mut(&mut self, index: &SlabIndex) -> Option<&mut T> {
-        self.slab.get_mut(index.key).and_then(|e|
+        self.slab.get_mut(index.key).and_then(|e| {
             if &index.generation == &e.generation {
                 Some(&mut e.value)
             } else {
                 None
-            })
+            }
+        })
     }
 
     pub fn remove(&mut self, index: &SlabIndex) -> T {
@@ -101,7 +103,10 @@ impl<'a, T> Iterator for Iter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (k, v) = self.iter.next()?;
-        let i = SlabIndex { key: k, generation: v.generation };
+        let i = SlabIndex {
+            key: k,
+            generation: v.generation,
+        };
 
         Some((i, &v.value))
     }
@@ -116,7 +121,10 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (k, v) = self.iter.next()?;
-        let i = SlabIndex { key: k, generation: v.generation };
+        let i = SlabIndex {
+            key: k,
+            generation: v.generation,
+        };
 
         Some((i, &mut v.value))
     }

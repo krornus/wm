@@ -101,30 +101,22 @@ impl Rect {
 
     pub fn corner(&self, at: Corner) -> Point {
         match at {
-            Corner::TopLeft => {
-                Point {
-                    x: self.x,
-                    y: self.y,
-                }
-            }
-            Corner::TopRight => {
-                Point {
-                    x: self.x + self.w as i16,
-                    y: self.y,
-                }
-            }
-            Corner::BottomLeft => {
-                Point {
-                    x: self.x,
-                    y: self.y + self.h as i16,
-                }
-            }
-            Corner::BottomRight => {
-                Point {
-                    x: self.x + self.w as i16,
-                    y: self.y + self.h as i16,
-                }
-            }
+            Corner::TopLeft => Point {
+                x: self.x,
+                y: self.y,
+            },
+            Corner::TopRight => Point {
+                x: self.x + self.w as i16,
+                y: self.y,
+            },
+            Corner::BottomLeft => Point {
+                x: self.x,
+                y: self.y + self.h as i16,
+            },
+            Corner::BottomRight => Point {
+                x: self.x + self.w as i16,
+                y: self.y + self.h as i16,
+            },
         }
     }
 
@@ -137,9 +129,9 @@ impl Rect {
 
                 (
                     Rect::new(self.x, self.y, self.w, n),
-                    Rect::new(self.x, self.y + n as i16, self.w, self.h - n)
+                    Rect::new(self.x, self.y + n as i16, self.w, self.h - n),
                 )
-            },
+            }
             Cut::Vertical(mut n) => {
                 if n > self.w || n > i16::MAX as u16 {
                     n = self.w;
@@ -147,7 +139,7 @@ impl Rect {
 
                 (
                     Rect::new(self.x, self.y, n, self.h),
-                    Rect::new(self.x + n as i16, self.y, self.w - n, self.h)
+                    Rect::new(self.x + n as i16, self.y, self.w - n, self.h),
                 )
             }
         }
@@ -155,31 +147,24 @@ impl Rect {
 
     pub fn split<'a>(&'a self, at: Split) -> SplitIterator<'a> {
         match at {
-            Split::Horizontal(n) => {
-                SplitIterator::Horizontal(HorizontalSplit::new(self, n))
-            },
-            Split::Vertical(n) => {
-                SplitIterator::Vertical(VerticalSplit::new(self, n))
-            },
+            Split::Horizontal(n) => SplitIterator::Horizontal(HorizontalSplit::new(self, n)),
+            Split::Vertical(n) => SplitIterator::Vertical(VerticalSplit::new(self, n)),
         }
     }
 }
 
-
 impl Contains<Point> for Rect {
     fn contains(&self, point: &Point) -> bool {
-        point.x < self.w as i16 && point.y < self.h as i16 &&
-        point.x >= self.x && point.y >= self.y
+        point.x < self.w as i16 && point.y < self.h as i16 && point.x >= self.x && point.y >= self.y
     }
 }
 
 impl Contains<Rect> for Rect {
     fn contains(&self, other: &Rect) -> bool {
-        self.contains(&other.corner(Corner::TopLeft)) &&
-        self.contains(&other.corner(Corner::BottomRight))
+        self.contains(&other.corner(Corner::TopLeft))
+            && self.contains(&other.corner(Corner::BottomRight))
     }
 }
-
 
 impl<'a> HorizontalSplit<'a> {
     fn new(rect: &'a Rect, count: usize) -> Self {
@@ -224,7 +209,6 @@ impl<'a> VerticalSplit<'a> {
         }
     }
 }
-
 
 impl<'a> Iterator for HorizontalSplit<'a> {
     type Item = Rect;
@@ -306,7 +290,7 @@ impl<'a> Iterator for VerticalSplit<'a> {
     }
 }
 
-impl <'a> Iterator for SplitIterator<'a> {
+impl<'a> Iterator for SplitIterator<'a> {
     type Item = Rect;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -316,7 +300,6 @@ impl <'a> Iterator for SplitIterator<'a> {
         }
     }
 }
-
 
 impl fmt::Display for Point {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -329,7 +312,6 @@ impl fmt::Display for Rect {
         write!(f, "{}x{}+{}+{}", self.w, self.h, self.x, self.y)
     }
 }
-
 
 #[cfg(test)]
 mod split_tests {
