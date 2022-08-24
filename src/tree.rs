@@ -1,12 +1,28 @@
+use std::fmt;
+
 use slab;
 
 pub struct TreeNode<T> {
     pub value: T,
     index: usize,
     parent: Option<usize>,
+    first: Option<usize>,
+    last: Option<usize>,
     left: Option<usize>,
     right: Option<usize>,
-    child: Option<usize>,
+}
+
+impl<T> fmt::Debug for TreeNode<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TreeNode<T>")
+         .field("index", &self.index)
+         .field("parent", &self.parent)
+         .field("first", &self.first)
+         .field("last", &self.last)
+         .field("left", &self.left)
+         .field("right", &self.right)
+         .finish()
+    }
 }
 
 impl<T> TreeNode<T> {
@@ -17,7 +33,8 @@ impl<T> TreeNode<T> {
             parent: None,
             left: None,
             right: None,
-            child: None,
+            first: None,
+            last: None,
         }
     }
 }
@@ -40,12 +57,18 @@ impl<T> TreeNode<T> {
 
     #[inline]
     pub fn next_sibling(&self) -> Option<usize> {
+        println!("{}.right = {:?}", self.index, self.right);
         self.right
     }
 
     #[inline]
-    pub fn child(&self) -> Option<usize> {
-        self.child
+    pub fn first_child(&self) -> Option<usize> {
+        self.first
+    }
+
+    #[inline]
+    pub fn last_child(&self) -> Option<usize> {
+        self.last
     }
 }
 
@@ -96,26 +119,35 @@ impl<T> Tree<T> {
     pub fn adopt(&mut self, index: usize, child: usize) {
         /* set the parent index in the new child */
         let parent = self.get_mut(index);
-        let child_index = parent.child.replace(child);
+        let sibling = parent.last.replace(child);
 
         /* replace the index of the child with the new key,
          * and set the child's sibing to the new key. */
-        match child_index {
+        match sibling {
             Some(i) => {
-                let child = self.get_mut(i);
-                child.left = Some(index);
+                self.get_mut(i).right = Some(child);
             }
-            _ => {}
+            _ => {
+                /* no children - set first and last */
+                parent.first = Some(child);
+            }
         }
 
         let mut node = self.get_mut(child);
         node.parent = Some(index);
-        node.right = child_index;
+        node.left = sibling;
+
     }
 
     pub fn insert(&mut self, index: usize, value: T) -> usize {
         let child = self.orphan(value);
         self.adopt(index, child);
+
+        println!("parent: {:?}", self.get(index));
+        for child in self.children(index) {
+            println!("  child: {:?}", self.get(child));
+        }
+
         child
     }
 
@@ -141,6 +173,10 @@ impl<T> Tree<T> {
         }
     }
 
+    pub fn drop(&mut self, index: usize) -> TreeNode<T> {
+        self.slab.remove(index)
+    }
+
     pub fn remove(&mut self, index: usize) -> Option<Tree<T>> {
         let children: Vec<_> = self.children(index).collect();
 
@@ -160,7 +196,7 @@ impl<T> Tree<T> {
 
 impl<T> Tree<T> {
     pub fn children<'a>(&'a self, index: usize) -> Children<'a, T> {
-        let child = self.get(index).child;
+        let child = self.get(index).first;
 
         Children {
             tree: self,

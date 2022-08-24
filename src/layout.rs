@@ -1,4 +1,3 @@
-use crate::client::Client;
 use crate::rect::{Cut, Rect, Split};
 
 #[derive(Debug)]
@@ -6,20 +5,6 @@ pub enum Cell {
     Hide,
     Show(Rect),
     Focus(Rect),
-}
-
-impl<'a> From<&'a Client> for Cell {
-    fn from(client: &'a Client) -> Self {
-        if client.visible() {
-            if client.focused() {
-                Cell::Focus(*client.rect())
-            } else {
-                Cell::Show(*client.rect())
-            }
-        } else {
-            Cell::Hide
-        }
-    }
 }
 
 pub trait Layout {

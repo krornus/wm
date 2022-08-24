@@ -9,7 +9,6 @@ use xcb::x;
 pub struct Client {
     window: x::Window,
     visible: bool,
-    focus: bool,
     rect: Rect,
     mask: HashMap<TagSetId, TagMask>,
 }
@@ -26,11 +25,6 @@ impl Client {
     }
 
     #[inline]
-    pub fn focused(&self) -> bool {
-        self.focus
-    }
-
-    #[inline]
     pub fn rect(&self) -> &Rect {
         &self.rect
     }
@@ -41,7 +35,6 @@ impl Client {
         Client {
             window: window,
             visible: false,
-            focus: false,
             rect: rect,
             mask: HashMap::new(),
         }
@@ -63,11 +56,13 @@ impl Client {
         }
     }
 
-    pub fn focus<T>(&mut self, _: &mut Adapter<T>, p: bool) {
-        if self.focus != p {
-            /* TODO: actually grab/release focus */
-            self.focus = p;
-        }
+    pub fn focus<T>(&mut self, adapter: &mut Adapter<T>) {
+        println!("focus: {:?}", self.window);
+        adapter.request(&x::SetInputFocus {
+            revert_to: x::InputFocus::PointerRoot,
+            focus: self.window,
+            time: x::CURRENT_TIME,
+        });
     }
 
     pub fn resize<T>(&mut self, adapter: &mut Adapter<T>, rect: &Rect) {
@@ -108,7 +103,6 @@ impl Client {
     pub fn set_mask(&mut self, mask: HashMap<TagSetId, TagMask>) {
         self.mask = mask.clone()
     }
-
 
     pub fn get_mask_mut(&mut self, id: TagSetId) -> Option<&mut TagMask> {
         self.mask.get_mut(&id)

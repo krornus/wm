@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::display::ViewId;
+use crate::display::MonitorId;
 use crate::error::Error;
 use crate::keysym;
 use crate::wm::Adapter;
@@ -127,7 +127,7 @@ pub enum Press {
 }
 
 pub struct Binding<T: Copy> {
-    pub view: Option<ViewId>,
+    pub view: Option<MonitorId>,
     pub mask: Modifier,
     pub keysym: Keysym,
     pub press: Press,
@@ -136,7 +136,7 @@ pub struct Binding<T: Copy> {
 
 #[derive(Clone)]
 struct BindValue<T: Copy> {
-    view: Option<ViewId>,
+    view: Option<MonitorId>,
     value: T,
 }
 
@@ -181,7 +181,7 @@ impl<T: Copy> BindingSet<T> {
         }
     }
 
-    fn get(&self, view: Option<ViewId>) -> Option<T> {
+    fn get(&self, view: Option<MonitorId>) -> Option<T> {
         let at = view.and_then(|id| self.local.iter().position(|x| x.view == Some(id)));
 
         match at {
@@ -222,7 +222,6 @@ impl<T: Copy> Keys<T> {
     #[inline]
     fn grab(&self, adapter: &mut Adapter<T>, modifiers: Modifier, keycode: Keycode) {
         let m = unsafe { x::ModMask::from_bits_unchecked(modifiers.bits()) };
-        println!("grab: {:?}: [{:?} + {:?}]", self.root, m, keycode);
 
         adapter.request(&x::GrabKey {
             owner_events: true,
@@ -292,7 +291,7 @@ impl<T: Copy> Keys<T> {
 
     pub fn get(
         &self,
-        focus: Option<ViewId>,
+        focus: Option<MonitorId>,
         mask: x::KeyButMask,
         k: Keycode,
         press: bool,

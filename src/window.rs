@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::error::Error;
 use crate::layout::{Cell, Layout};
 use crate::rect::Rect;
 use crate::tag::TagSelection;
@@ -14,7 +15,6 @@ pub enum Window {
 
 pub struct WindowTree {
     tree: tree::Tree<Window>,
-    focus: usize,
 }
 
 impl WindowTree {
@@ -22,22 +22,15 @@ impl WindowTree {
         let win = Window::Layout(Box::new(layout));
         let mut tree = tree::Tree::new();
         tree.swap_root(win);
-        let root = tree.root().unwrap();
 
         WindowTree {
             tree: tree,
-            focus: root,
         }
     }
 
     #[inline]
     pub fn root(&self) -> usize {
         self.tree.root().unwrap()
-    }
-
-    #[inline]
-    pub fn focus(&self) -> usize {
-        self.focus
     }
 
     pub fn find(&self, window: x::Window) -> Option<usize> {
@@ -51,6 +44,21 @@ impl WindowTree {
             }
             _ => None,
         })
+    }
+
+    pub fn insert(&mut self, mut id: usize, value: Window) -> usize {
+        /* TODO: fix this so that the type system only allows inserting into a layout */
+        let node = self.tree.get(id);
+        match node.value {
+            Window::Client(_) => {
+                id = node
+                    .parent()
+                    .expect("cannot add node to single-client tree");
+            }
+            _ => {}
+        }
+
+        self.tree.insert(id, value)
     }
 
     pub fn get(&self, id: usize) -> Option<&Client> {
@@ -67,18 +75,21 @@ impl WindowTree {
         }
     }
 
-    pub fn insert(&mut self, mut id: usize, value: Window) -> usize {
-        /* TODO: fix this so that the type system only allows inserting into a layout */
-        let node = self.tree.get(id);
-        match node.value {
-            Window::Client(_) => {
-                id = node.parent()
-                    .expect("cannot add node to single-client tree");
-            }
-            _ => {}
-        }
+    pub fn next(&self, id: usize) -> Option<usize> {
+        self.tree.get(id).next_sibling()
+    }
 
-        self.tree.insert(id, value)
+    pub fn previous(&self, id: usize) -> Option<usize> {
+        self.tree.get(id).previous_sibling()
+    }
+
+    pub fn remove(&mut self, id: usize) -> Client {
+        let node = self.tree.drop(id);
+
+        match node.value {
+            Window::Client(c) => c,
+            Window::Layout(_) => panic!("attempt to remove layout"),
+        }
     }
 
     pub fn show<T>(&mut self, adapter: &mut Adapter<T>, index: usize, visible: bool) {
@@ -91,7 +102,7 @@ impl WindowTree {
             _ => {}
         }
 
-        let mut child = node.child();
+        let mut child = node.first_child();
 
         while let Some(id) = child {
             /* get everything from node at the start in order to drop it for
@@ -116,16 +127,24 @@ impl WindowTree {
         adapter: &mut Adapter<T>,
         mask: &TagSelection<'a, 'b>,
         rect: &Rect,
-    ) {
-        println!("arrange: {}", rect);
-
+    ) -> Result<Option<usize>, Error> {
         if let Some(root) = self.tree.root() {
+            let cookie = adapter.conn.send_request(&x::GetInputFocus {});
+
             let masktree = MaskTree::new(adapter, self, mask, root);
 
+            let reply = adapter.conn.wait_for_reply(cookie)?;
+
             match masktree.root() {
-                Some(root) => self.arrange_recursive(adapter, &masktree, root, rect),
-                None => {}
+                Some(root) => {
+                    Ok(self.arrange_recursive(adapter, &masktree, root, rect, reply.focus()))
+                }
+                None => {
+                    Ok(None)
+                }
             }
+        } else {
+            Ok(None)
         }
     }
 
@@ -135,10 +154,14 @@ impl WindowTree {
         masktree: &MaskTree,
         index: usize,
         rect: &Rect,
-    ) {
+        active: x::Window,
+    ) -> Option<usize> {
+
+        let mut focus = None;
+
         let mut cells = vec![];
         let parent = masktree.get(index);
-        let mut child = parent.child();
+        let mut child = parent.first_child();
 
         while let Some(id) = child {
             let node = masktree.get(id);
@@ -147,7 +170,11 @@ impl WindowTree {
             child = node.next_sibling();
 
             if let Window::Client(ref c) = window.value {
-                cells.push(Cell::from(c));
+                if c.window() == active {
+                    cells.push(Cell::Focus(*c.rect()));
+                } else {
+                    cells.push(Cell::Show(*c.rect()));
+                }
             } else {
                 cells.push(Cell::Hide);
             }
@@ -163,12 +190,8 @@ impl WindowTree {
             _ => {}
         }
 
-        for cell in cells.iter() {
-            println!("  -> {:?}", cell);
-        }
-
         let mut i = 0;
-        child = parent.child();
+        child = parent.first_child();
 
         while let Some(id) = child {
             let node = masktree.get(id);
@@ -186,6 +209,8 @@ impl WindowTree {
                         client.resize(adapter, r);
                     }
                     Cell::Focus(r) => {
+                        focus = Some(i);
+                        client.focus(adapter);
                         client.show(adapter, true);
                         client.resize(adapter, r);
                     }
@@ -196,10 +221,11 @@ impl WindowTree {
                         Cell::Hide => {
                             self.show(adapter, node.value, false);
                         }
-                        Cell::Show(r) => self.arrange_recursive(adapter, masktree, id, r),
+                        Cell::Show(r) => {
+                            focus = self.arrange_recursive(adapter, masktree, id, r, active)
+                        }
                         Cell::Focus(r) => {
-                            self.focus = id;
-                            self.arrange_recursive(adapter, masktree, id, r)
+                            focus = self.arrange_recursive(adapter, masktree, id, r, active)
                         }
                     }
                 }
@@ -207,6 +233,8 @@ impl WindowTree {
 
             i += 1;
         }
+
+        focus
     }
 
     pub fn take(&mut self, mut other: WindowTree) {
@@ -221,7 +249,7 @@ impl WindowTree {
     }
 }
 
-pub struct MaskTree {
+struct MaskTree {
     tree: tree::Tree<usize>,
 }
 
@@ -260,10 +288,8 @@ impl MaskTree {
         match node.value {
             Window::Client(ref mut client) => {
                 if client.mask(mask) {
-                    println!("Unhidden window: {:?}", client.window());
                     Some(self.tree.orphan(from))
                 } else {
-                    println!("Hidden window: {:?}", client.window());
                     client.show(adapter, false);
                     None
                 }
@@ -271,7 +297,7 @@ impl MaskTree {
             Window::Layout(_) => {
                 let mut children = false;
                 let parent = self.tree.orphan(from);
-                let mut child = node.child();
+                let mut child = node.first_child();
 
                 while let Some(id) = child {
                     node = tree.tree.get_mut(id);

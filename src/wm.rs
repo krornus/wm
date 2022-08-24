@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::client::Client;
-use crate::display::{Display, ViewId};
+use crate::display::{Display, Monitor, MonitorId};
 use crate::error::Error;
 use crate::keyboard::{Binding, Keys};
 use crate::rect::Rect;
@@ -37,7 +37,7 @@ impl<T> Adapter<T> {
         self.pending.push(cookie);
     }
 
-    pub fn check(&mut self) -> Result<bool, Error> {
+    pub fn flush(&mut self) -> Result<bool, Error> {
         let ok = self.pending.len() > 0;
 
         for c in self.pending.drain(..) {
@@ -59,11 +59,12 @@ impl<T> Adapter<T> {
 pub enum Event<T> {
     Empty,
     Interrupt,
-    MonitorConnect(ViewId),
-    MonitorResize(ViewId),
-    MonitorDisconnect(ViewId),
-    MonitorPrimary(ViewId),
-    ClientCreate(ViewId, usize),
+    MonitorConnect(MonitorId),
+    MonitorResize(MonitorId),
+    MonitorDisconnect(MonitorId),
+    MonitorPrimary(MonitorId),
+    ClientCreate(MonitorId, usize),
+    ClientDestroy(usize),
     UserEvent(T),
 }
 
@@ -93,7 +94,7 @@ impl<T: Copy> WindowManager<T> {
         conn.send_and_check_request(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
-                      x::EventMask::STRUCTURE_NOTIFY
+                x::EventMask::STRUCTURE_NOTIFY
                     | x::EventMask::PROPERTY_CHANGE
                     | x::EventMask::SUBSTRUCTURE_NOTIFY
                     | x::EventMask::SUBSTRUCTURE_REDIRECT,
@@ -110,9 +111,9 @@ impl<T: Copy> WindowManager<T> {
         adapter.conn.send_and_check_request(&randr::SelectInput {
             window: root,
             enable: randr::NotifyMask::SCREEN_CHANGE
-                  | randr::NotifyMask::OUTPUT_CHANGE
-                  | randr::NotifyMask::CRTC_CHANGE
-                  | randr::NotifyMask::OUTPUT_PROPERTY,
+                | randr::NotifyMask::OUTPUT_CHANGE
+                | randr::NotifyMask::CRTC_CHANGE
+                | randr::NotifyMask::OUTPUT_PROPERTY,
         })?;
 
         let wm = WindowManager {
@@ -157,10 +158,6 @@ impl<T: Copy> WindowManager<T> {
 }
 
 impl<T: Copy> WindowManager<T> {
-    pub fn flush(&mut self) -> Result<bool, Error> {
-        self.adapter.check()
-    }
-
     pub fn next(&mut self) -> Result<Event<T>, Error> {
         let event = self.adapter.conn.wait_for_event()?;
 
@@ -185,9 +182,7 @@ impl<T: Copy> WindowManager<T> {
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
                 let focus = self.display.focus;
-                let value = self
-                    .keys
-                    .get(focus, e.state(), e.detail() as Keycode, true);
+                let value = self.keys.get(focus, e.state(), e.detail() as Keycode, true);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             }
             xcb::Event::X(xcb::x::Event::KeyRelease(ref e)) => {
@@ -208,31 +203,27 @@ impl<T: Copy> WindowManager<T> {
             xcb::Event::X(xcb::x::Event::ConfigureNotify(ref e)) => {
                 if self.root == e.window() {
                     /* this forces randr to update, flushing out any ScreenChangeNotifys */
-                    self.display.configure(&mut self.adapter, e.window())?;
+                    self.display.reconfigure(&mut self.adapter, e.window())?;
                 }
 
                 Ok(Event::Empty)
             }
             xcb::Event::X(xcb::x::Event::EnterNotify(ref e)) => {
-                self.display.iter()
-                    .find_map(|(vid, view)| {
-                        view.find(e.event())
-                            .map(|cid| (vid, cid))
-                    })
+                self.display
+                    .iter()
+                    .find_map(|(vid, view)| view.find(e.event()).map(|cid| (vid, cid)))
                     .map(|(id, cid)| {
-                        let vid = ViewId::from(id);
+                        let vid = MonitorId::from(id);
                         self.display.focus = Some(vid);
-                        self.display.get_mut(vid)
-                            .map(|view| view.focus = cid)
+                        self.display.get_mut(vid).map(|view| view.focus = cid)
                     });
 
-                println!("enter notify");
                 Ok(Event::Empty)
             }
             _ => Ok(Event::Empty),
         };
 
-        self.adapter.check()?;
+        self.adapter.flush()?;
 
         e
     }
@@ -269,27 +260,54 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
-    pub fn display(&self) -> &Display {
-        &self.display
+    #[inline]
+    pub fn get(&self, view: MonitorId) -> Option<&Monitor> {
+        self.display.get(view)
     }
 
-    pub fn display_mut(&mut self) -> &mut Display {
-        &mut self.display
+    #[inline]
+    pub fn get_mut(&mut self, view: MonitorId) -> Option<&mut Monitor> {
+        self.display.get_mut(view)
+    }
+
+    pub fn flush(&mut self) -> Result<bool, Error> {
+        self.adapter.flush()
+    }
+
+    pub fn get_focus(&mut self) -> Option<MonitorId> {
+        self.display.focus
+    }
+
+    pub fn set_focus(&mut self, mon: MonitorId, client: usize) {
+        let a = &mut self.adapter;
+
+        self.display
+            .get_mut(mon)
+            .map(|m| {
+                match m.get_mut(client) {
+                    Some(c) => {
+                        c.focus(a);
+                        m.focus = client;
+                    }
+                    None => {
+                    }
+                }
+            });
     }
 
     pub fn arrange<'a, 'b>(
         &mut self,
-        id: ViewId,
+        id: MonitorId,
         mask: &TagSelection<'a, 'b>,
     ) -> Result<(), Error> {
-        let view = self.display.get_mut(id).ok_or(Error::MissingView)?;
-
-        view.arrange(&mut self.adapter, mask);
-        self.adapter.check()?;
-
-        Ok(())
+        match self.display.get_mut(id) {
+            Some(view) => view.arrange(&mut self.adapter, mask),
+            None => Ok(())
+        }
     }
+}
 
+impl<T: Copy> WindowManager<T> {
     fn manage(&mut self, window: x::Window) -> Event<T> {
         let rect = Rect::new(0, 0, 0, 0);
         let client = Client::new(window, rect);
@@ -298,8 +316,7 @@ impl<T: Copy> WindowManager<T> {
         self.adapter.request(&x::ChangeWindowAttributes {
             window: window,
             value_list: &[xcb::x::Cw::EventMask(
-                      x::EventMask::ENTER_WINDOW
-                    | x::EventMask::FOCUS_CHANGE,
+                x::EventMask::ENTER_WINDOW | x::EventMask::FOCUS_CHANGE,
             )],
         });
 
@@ -312,11 +329,10 @@ impl<T: Copy> WindowManager<T> {
         let mask = event.value_mask();
         let mut values = Vec::with_capacity(7);
 
-        let client = self.display.iter()
-            .find_map(|(_, view)| {
-                view.find(event.window())
-                    .and_then(|id| view.get(id))
-            });
+        let client = self
+            .display
+            .iter()
+            .find_map(|(_, view)| view.find(event.window()).and_then(|id| view.get(id)));
 
         let rect = if let Some(c) = client {
             *c.rect()
@@ -329,9 +345,7 @@ impl<T: Copy> WindowManager<T> {
         values.push(x::ConfigWindow::Width(rect.w as u32));
         values.push(x::ConfigWindow::Height(rect.h as u32));
 
-        if mask.contains(xcb::x::ConfigWindowMask::BORDER_WIDTH) {
-            values.push(x::ConfigWindow::BorderWidth(event.border_width() as u32));
-        }
+        values.push(x::ConfigWindow::BorderWidth(2));
 
         if mask.contains(xcb::x::ConfigWindowMask::SIBLING) {
             values.push(x::ConfigWindow::Sibling(event.sibling()));
@@ -353,7 +367,16 @@ impl<T: Copy> WindowManager<T> {
 
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
-        Ok(self.manage(e.window()))
+        let client = self
+            .display
+            .iter()
+            .find_map(|(_, view)| view.find(e.window()));
+
+        if client.is_none() {
+            Ok(self.manage(e.window()))
+        } else {
+            Ok(Event::Empty)
+        }
     }
 
     /// handle the UnmapNotifyEvent, which notifies us that a window has been unmapped (hidden)
@@ -362,7 +385,7 @@ impl<T: Copy> WindowManager<T> {
     }
 
     /// handle the DestroyNotify, which notifies us that a window has been destroyed
-    fn destroy(&mut self, _: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
+    fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
     }
 }

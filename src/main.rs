@@ -14,22 +14,68 @@ mod tree;
 mod window;
 mod wm;
 
-use crate::display::ViewId;
+use crate::display::MonitorId;
 use crate::tag::{Tag, TagSet, TagSetId, Tags};
+
+use xcb::x;
 
 #[derive(Copy, Clone)]
 enum Event {
     Exit,
-    TagViewSet(ViewId, TagSetId, Tag),
-    TagViewUpdate(ViewId, TagSetId, Tag),
-    TagClientSet(TagSetId, Tag),
-    TagClientUpdate(TagSetId, Tag),
+    FocusNext,
+    FocusPrevious,
+    MonitorSet(MonitorId, TagSetId, Tag),
+    MonitorUpdate(MonitorId, TagSetId, Tag),
+    ClientSet(TagSetId, Tag),
+    ClientUpdate(TagSetId, Tag),
     Spawn(&'static str),
+}
+
+fn tag(
+    wm: &mut wm::WindowManager<Event>,
+    sym: x::Keysym,
+    view: MonitorId,
+    tag: TagSetId,
+    index: usize,
+) -> Result<(), error::Error> {
+    wm.bind(&keyboard::Binding {
+        view: Some(view),
+        mask: keyboard::Modifier::MOD4,
+        keysym: sym,
+        press: keyboard::Press::Press,
+        value: Event::MonitorSet(view, tag, Tag::On(index)),
+    })?;
+
+    wm.bind(&keyboard::Binding {
+        view: Some(view),
+        mask: keyboard::Modifier::MOD4 | keyboard::Modifier::CONTROL,
+        keysym: sym,
+        press: keyboard::Press::Press,
+        value: Event::MonitorUpdate(view, tag, Tag::Toggle(index)),
+    })?;
+
+    wm.bind(&keyboard::Binding {
+        view: Some(view),
+        mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT,
+        keysym: sym,
+        press: keyboard::Press::Press,
+        value: Event::ClientSet(tag, Tag::On(index)),
+    })?;
+
+    wm.bind(&keyboard::Binding {
+        view: Some(view),
+        mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT | keyboard::Modifier::CONTROL,
+        keysym: sym,
+        press: keyboard::Press::Press,
+        value: Event::ClientUpdate(tag, Tag::Toggle(index)),
+    })?;
+
+    Ok(())
 }
 
 fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
     let mut tags = Tags::new();
-    let mut tagsets: HashMap<ViewId, Vec<TagSetId>> = HashMap::new();
+    let mut tagsets: HashMap<MonitorId, Vec<TagSetId>> = HashMap::new();
 
     wm.bind(&keyboard::Binding {
         view: None,
@@ -47,13 +93,31 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
         value: Event::Exit,
     })?;
 
+
+    wm.bind(&keyboard::Binding {
+        view: None,
+        mask: keyboard::Modifier::MOD4,
+        keysym: keysym::j,
+        press: keyboard::Press::Press,
+        value: Event::FocusNext,
+    })?;
+
+    wm.bind(&keyboard::Binding {
+        view: None,
+        mask: keyboard::Modifier::MOD4,
+        keysym: keysym::k,
+        press: keyboard::Press::Press,
+        value: Event::FocusPrevious,
+    })?;
+
+
     wm.flush()?;
 
     loop {
         match wm.next()? {
             wm::Event::MonitorConnect(id) => {
-                let view = wm.display_mut().get_mut(id).unwrap();
-                let rect = view.rect();
+                let monitor = wm.get_mut(id).unwrap();
+                let rect = monitor.rect();
 
                 println!("connect monitor: {}", rect);
 
@@ -62,53 +126,11 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
 
                 tagsets.entry(id).or_insert(vec![]).push(tagid);
 
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4,
-                    keysym: keysym::a,
-                    press: keyboard::Press::Press,
-                    value: Event::TagViewSet(id, tagid, Tag::On(0)),
-                })?;
-
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4,
-                    keysym: keysym::s,
-                    press: keyboard::Press::Press,
-                    value: Event::TagViewSet(id, tagid, Tag::On(1)),
-                })?;
-
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::CONTROL,
-                    keysym: keysym::a,
-                    press: keyboard::Press::Press,
-                    value: Event::TagViewUpdate(id, tagid, Tag::Toggle(0)),
-                })?;
-
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::CONTROL,
-                    keysym: keysym::s,
-                    press: keyboard::Press::Press,
-                    value: Event::TagViewUpdate(id, tagid, Tag::Toggle(1)),
-                })?;
-
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT,
-                    keysym: keysym::a,
-                    press: keyboard::Press::Press,
-                    value: Event::TagClientSet(tagid, Tag::On(0)),
-                })?;
-
-                wm.bind(&keyboard::Binding {
-                    view: Some(id),
-                    mask: keyboard::Modifier::MOD4 | keyboard::Modifier::SHIFT,
-                    keysym: keysym::s,
-                    press: keyboard::Press::Press,
-                    value: Event::TagClientSet(tagid, Tag::On(1)),
-                })?;
+                tag(wm, keysym::a, id, tagid, 0)?;
+                tag(wm, keysym::s, id, tagid, 1)?;
+                tag(wm, keysym::d, id, tagid, 2)?;
+                tag(wm, keysym::f, id, tagid, 3)?;
+                tag(wm, keysym::g, id, tagid, 4)?;
 
                 wm.flush()?;
             }
@@ -118,22 +140,20 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
                     wm.arrange(view, &selection)?;
                 }
             }
-            wm::Event::ClientCreate(view, id) => {
-                wm.display_mut()
-                    .get_mut(view)
-                    .and_then(|view| view.get_mut(id))
-                    .map(|client| client.set_mask(tags.masks().clone()));
+            wm::Event::ClientCreate(mid, cid) => {
+                wm.get_mut(mid)
+                  .and_then(|mon| mon.get_mut(cid))
+                  .map(|client| client.set_mask(tags.masks().clone()));
 
-                if let Some(ids) = tagsets.get(&view) {
+                if let Some(ids) = tagsets.get(&mid) {
                     let selection = tags.select(ids);
-                    wm.arrange(view, &selection)?;
+                    wm.arrange(mid, &selection)?;
                 }
             }
             wm::Event::UserEvent(Event::Spawn(args)) => {
                 wm.spawn(args);
             }
-            wm::Event::UserEvent(Event::TagViewSet(view, tagset, tag)) => {
-                println!("set: {:?}", tag);
+            wm::Event::UserEvent(Event::MonitorSet(view, tagset, tag)) => {
                 tags.mask_mut(tagset).map(|mask| {
                     mask.clear();
                     mask.set(tag);
@@ -144,8 +164,7 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
                     wm.arrange(view, &selection)?;
                 }
             }
-            wm::Event::UserEvent(Event::TagViewUpdate(view, tagset, tag)) => {
-                println!("update: {:?}", tag);
+            wm::Event::UserEvent(Event::MonitorUpdate(view, tagset, tag)) => {
                 tags.mask_mut(tagset).map(|mask| {
                     mask.set(tag);
                 });
@@ -155,26 +174,48 @@ fn run(wm: &mut wm::WindowManager<Event>) -> Result<(), error::Error> {
                     wm.arrange(view, &selection)?;
                 }
             }
-            wm::Event::UserEvent(Event::TagClientSet(tagset, tag)) => {
-                wm.display().focus
-                    .and_then(|f| wm.display_mut().get_mut(f))
-                    .and_then(|v| v.get_mut(v.focus))
-                    .and_then(|c| c.get_mask_mut(tagset))
-                    .map(|t| {
-                        println!("  -> {:?}", tag);
-                        t.clear();
-                        t.set(tag);
-                    });
+            wm::Event::UserEvent(Event::ClientSet(tagset, tag)) => {
+                wm.get_focus()
+                  .and_then(|f| wm.get_mut(f))
+                  .and_then(|v| v.get_mut(v.focus))
+                  .and_then(|c| c.get_mask_mut(tagset))
+                  .map(|t| {
+                      t.clear();
+                      t.set(tag);
+                  });
 
-                if let Some(view) = wm.display().focus {
+                if let Some(view) = wm.get_focus() {
                     if let Some(ids) = tagsets.get(&view) {
                         let selection = tags.select(ids);
                         wm.arrange(view, &selection)?;
                     }
                 }
-
             }
-            wm::Event::UserEvent(Event::TagClientUpdate(_, _)) => {
+            wm::Event::UserEvent(Event::ClientUpdate(tagset, tag)) => {
+                wm.get_focus()
+                  .and_then(|focus| wm.get_mut(focus))
+                  .and_then(|view| view.get_mut(view.focus))
+                  .and_then(|client| client.get_mask_mut(tagset))
+                  .map(|mask| mask.set(tag));
+
+                if let Some(view) = wm.get_focus() {
+                    if let Some(ids) = tagsets.get(&view) {
+                        let selection = tags.select(ids);
+                        wm.arrange(view, &selection)?;
+                    }
+                }
+            }
+            wm::Event::UserEvent(Event::FocusNext) => {
+                wm.get_focus()
+                    .and_then(|f| wm.get(f).map(|v| (f, v)))
+                    .and_then(|(f, v)| v.next(v.focus).map(|c| (f, dbg!(c))))
+                    .map(|(f, v)| wm.set_focus(f, v));
+            }
+            wm::Event::UserEvent(Event::FocusPrevious) => {
+                wm.get_focus()
+                    .and_then(|f| wm.get(f).map(|m| (f, m)))
+                    .and_then(|(f, m)| m.previous(m.focus).map(|c| (f, dbg!(c))))
+                    .map(|(f, m)| wm.set_focus(f, m));
             }
             wm::Event::UserEvent(Event::Exit) => {
                 break Ok(());
