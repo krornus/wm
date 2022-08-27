@@ -7,54 +7,13 @@ use crate::display::{Display, Monitor, MonitorId};
 use crate::error::Error;
 use crate::keyboard::{Binding, Keys};
 use crate::rect::Rect;
-use crate::tag::{TagSelection, Tags};
+use crate::tag::Tags;
+use crate::painter::Painter;
 
 use fork::Fork;
 use signal_hook::consts::signal::*;
 use xcb::randr;
 use xcb::x::{self, Keycode};
-
-pub struct Adapter<T> {
-    pub conn: xcb::Connection,
-    pending: Vec<xcb::VoidCookieChecked>,
-    events: VecDeque<Event<T>>,
-}
-
-impl<T> Adapter<T> {
-    pub fn new(conn: xcb::Connection) -> Self {
-        Adapter {
-            conn: conn,
-            pending: vec![],
-            events: VecDeque::new(),
-        }
-    }
-
-    pub fn request<R>(&mut self, request: &R)
-    where
-        R: xcb::RequestWithoutReply + std::fmt::Debug,
-    {
-        let cookie = self.conn.send_request_checked(request);
-        self.pending.push(cookie);
-    }
-
-    pub fn flush(&mut self) -> Result<bool, Error> {
-        let ok = self.pending.len() > 0;
-
-        for c in self.pending.drain(..) {
-            self.conn.check_request(c)?;
-        }
-
-        Ok(ok)
-    }
-
-    pub fn push(&mut self, e: Event<T>) {
-        self.events.push_front(e);
-    }
-
-    pub fn pop(&mut self) -> Option<Event<T>> {
-        self.events.pop_back()
-    }
-}
 
 pub enum Event<T> {
     Empty,
@@ -68,20 +27,19 @@ pub enum Event<T> {
     UserEvent(T),
 }
 
-pub struct WindowManager<T: Copy> {
+pub struct Connection<T> {
+    raw: xcb::Connection,
+    screen: usize,
     root: x::Window,
-    adapter: Adapter<T>,
-    signal: Arc<AtomicUsize>,
-    tags: Tags,
-    display: Display,
-    keys: Keys<T>,
+    events: VecDeque<Event<T>>,
 }
 
-impl<T: Copy> WindowManager<T> {
-    /// Create a new WindowManager struct, with optional X11 display name
+impl<T> Connection<T> {
     pub fn connect(name: Option<&str>) -> Result<Self, Error> {
-        let (conn, main) =
-            xcb::Connection::connect_with_extensions(name, &[xcb::Extension::RandR], &[])?;
+        let (conn, main) = xcb::Connection::connect_with_extensions(
+            name,
+            &[xcb::Extension::RandR],
+            &[])?;
 
         let setup = conn.get_setup();
         let screen = setup
@@ -91,7 +49,94 @@ impl<T: Copy> WindowManager<T> {
 
         let root = screen.root();
 
-        conn.send_and_check_request(&x::ChangeWindowAttributes {
+        Ok(Connection {
+            raw: conn,
+            screen: main as usize,
+            root: root,
+            events: VecDeque::new(),
+        })
+    }
+
+    #[inline]
+    pub fn get_setup(&self) -> &x::Setup {
+        self.raw.get_setup()
+    }
+
+    #[inline]
+    pub fn generate_id<I: xcb::XidNew>(&self) -> I {
+        self.raw.generate_id()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn send_request<R>(&self, req: &R) -> R::Cookie
+    where
+        R: xcb::Request,
+    {
+        self.raw.send_request(req)
+    }
+
+    #[inline]
+    pub fn wait_for_reply<C>(&self, cookie: C) -> Result<C::Reply, Error>
+    where
+        C: xcb::CookieWithReplyChecked,
+    {
+        Ok(self.raw.wait_for_reply(cookie)?)
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn send_request_checked<R>(&mut self, request: &R) -> xcb::VoidCookieChecked
+    where
+        R: xcb::RequestWithoutReply,
+    {
+        self.raw.send_request_checked(request)
+    }
+
+    pub fn send_and_check_request<R>(&self, req: &R) -> xcb::ProtocolResult<()>
+    where
+        R: xcb::RequestWithoutReply,
+    {
+        self.raw.send_and_check_request(req)
+    }
+
+    #[inline]
+    pub fn check_request(&self, cookie: xcb::VoidCookieChecked) -> xcb::ProtocolResult<()> {
+        self.raw.check_request(cookie)
+    }
+
+
+    #[inline]
+    pub fn push(&mut self, e: Event<T>) {
+        self.events.push_front(e);
+    }
+
+    #[inline]
+    pub fn pop(&mut self) -> Option<Event<T>> {
+        self.events.pop_back()
+    }
+}
+
+pub struct WindowManager<T: Copy> {
+    signal: Arc<AtomicUsize>,
+    painter: Painter,
+    tags: Tags,
+    display: Display,
+    keys: Keys<T>,
+}
+
+impl<T: Copy> WindowManager<T> {
+    /// Create a new WindowManager struct, with optional X11 display name
+    pub fn new(conn: &mut Connection<T>) -> Result<Self, Error> {
+        let setup = conn.raw.get_setup();
+        let screen = setup
+            .roots()
+            .nth(conn.screen)
+            .ok_or(Error::MissingScreen)?;
+
+        let root = screen.root();
+
+        conn.raw.send_and_check_request(&x::ChangeWindowAttributes {
             window: root,
             value_list: &[xcb::x::Cw::EventMask(
                 x::EventMask::STRUCTURE_NOTIFY
@@ -102,13 +147,13 @@ impl<T: Copy> WindowManager<T> {
         })
         .map_err(|_| Error::AlreadyRunning)?;
 
-        let mut adapter = Adapter::new(conn);
-
+        let painter = Painter::new(conn, root, screen.default_colormap())?;
         let tags = Tags::new();
-        let keys = Keys::new(&adapter.conn, root)?;
-        let display = Display::new(&mut adapter, root)?;
+        let keys = Keys::new(conn, root)?;
 
-        adapter.conn.send_and_check_request(&randr::SelectInput {
+        let display = Display::new(conn, root)?;
+
+        conn.raw.send_and_check_request(&randr::SelectInput {
             window: root,
             enable: randr::NotifyMask::SCREEN_CHANGE
                 | randr::NotifyMask::OUTPUT_CHANGE
@@ -117,10 +162,9 @@ impl<T: Copy> WindowManager<T> {
         })?;
 
         let wm = WindowManager {
-            root: root,
             signal: Arc::new(AtomicUsize::new(0)),
-            adapter: adapter,
             display: display,
+            painter: painter,
             keys: keys,
             tags: tags,
         };
@@ -158,8 +202,13 @@ impl<T: Copy> WindowManager<T> {
 }
 
 impl<T: Copy> WindowManager<T> {
-    pub fn next(&mut self) -> Result<Event<T>, Error> {
-        let event = self.adapter.conn.wait_for_event()?;
+    pub fn next(&mut self, conn: &mut Connection<T>) -> Result<Event<T>, Error> {
+        match conn.pop() {
+            Some(e) => return Ok(e),
+            None => {}
+        }
+
+        let event = conn.raw.wait_for_event()?;
 
         const SIGCHLD_U: usize = SIGCHLD as usize;
         const SIGINT_U: usize = SIGINT as usize;
@@ -174,63 +223,45 @@ impl<T: Copy> WindowManager<T> {
             _ => {}
         }
 
-        match self.adapter.pop() {
-            Some(e) => return Ok(e),
-            None => {}
-        }
-
         let e = match event {
             xcb::Event::X(xcb::x::Event::KeyPress(ref e)) => {
-                let focus = self.display.focus;
+                let focus = self.display.get_focus();
                 let value = self.keys.get(focus, e.state(), e.detail() as Keycode, true);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             }
             xcb::Event::X(xcb::x::Event::KeyRelease(ref e)) => {
-                let focus = self.display.focus;
+                let focus = self.display.get_focus();
                 let value = self
                     .keys
                     .get(focus, e.state(), e.detail() as Keycode, false);
                 Ok(value.map_or(Event::Empty, |x| Event::UserEvent(x)))
             }
-            xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => self.configure(e),
-            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => self.map(e),
+            xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => self.configure(conn, e),
+            xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => self.map(conn, e),
+            xcb::Event::X(xcb::x::Event::EnterNotify(ref e)) => self.enter(conn, e),
             xcb::Event::X(xcb::x::Event::UnmapNotify(ref e)) => self.unmap(e),
             xcb::Event::X(xcb::x::Event::DestroyNotify(ref e)) => self.destroy(e),
             xcb::Event::RandR(xcb::randr::Event::ScreenChangeNotify(_)) => {
-                self.display.update(&mut self.adapter)?;
-                Ok(self.adapter.pop().unwrap_or(Event::Empty))
+                self.display.update(conn)?;
+                Ok(conn.pop().unwrap_or(Event::Empty))
             }
             xcb::Event::X(xcb::x::Event::ConfigureNotify(ref e)) => {
-                if self.root == e.window() {
+                if conn.root == e.window() {
                     /* this forces randr to update, flushing out any ScreenChangeNotifys */
-                    self.display.reconfigure(&mut self.adapter, e.window())?;
+                    self.display.reconfigure(conn, e.window())?;
                 }
-
-                Ok(Event::Empty)
-            }
-            xcb::Event::X(xcb::x::Event::EnterNotify(ref e)) => {
-                self.display
-                    .iter()
-                    .find_map(|(vid, view)| view.find(e.event()).map(|cid| (vid, cid)))
-                    .map(|(id, cid)| {
-                        let vid = MonitorId::from(id);
-                        self.display.focus = Some(vid);
-                        self.display.get_mut(vid).map(|view| view.focus = cid)
-                    });
 
                 Ok(Event::Empty)
             }
             _ => Ok(Event::Empty),
         };
 
-        self.adapter.flush()?;
-
         e
     }
 
     #[inline]
-    pub fn bind(&mut self, binding: &Binding<T>) -> Result<(), Error> {
-        self.keys.bind(&mut self.adapter, binding)
+    pub fn bind(&mut self, conn: &mut Connection<T>, binding: &Binding<T>) -> Result<(), Error> {
+        self.keys.bind(conn, binding)
     }
 
     pub fn spawn(&self, cmd: &str) {
@@ -270,62 +301,58 @@ impl<T: Copy> WindowManager<T> {
         self.display.get_mut(view)
     }
 
-    pub fn flush(&mut self) -> Result<bool, Error> {
-        self.adapter.flush()
+    #[inline]
+    pub fn get_monitor(&mut self) -> Option<MonitorId> {
+        self.display.get_focus()
     }
 
-    pub fn get_focus(&mut self) -> Option<MonitorId> {
-        self.display.focus
-    }
-
-    pub fn set_focus(&mut self, mon: MonitorId, client: usize) {
-        let a = &mut self.adapter;
-
-        self.display
-            .get_mut(mon)
-            .map(|m| {
-                match m.get_mut(client) {
-                    Some(c) => {
-                        c.focus(a);
-                        m.focus = client;
-                    }
-                    None => {
-                    }
-                }
-            });
-    }
-
-    pub fn arrange<'a, 'b>(
-        &mut self,
-        id: MonitorId,
-        mask: &TagSelection<'a, 'b>,
-    ) -> Result<(), Error> {
-        match self.display.get_mut(id) {
-            Some(view) => view.arrange(&mut self.adapter, mask),
-            None => Ok(())
-        }
+    pub fn get_focus(&mut self) -> Option<(MonitorId, usize)> {
+        self.get_monitor()
+          .and_then(|focus| match self.get(focus) {
+              Some(mon) => Some((focus, mon.focus)),
+              None => None,
+          })
     }
 }
 
 impl<T: Copy> WindowManager<T> {
-    fn manage(&mut self, window: x::Window) -> Event<T> {
+    fn manage(&mut self, conn: &mut Connection<T>, window: x::Window) -> Result<Event<T>, Error> {
         let rect = Rect::new(0, 0, 0, 0);
         let client = Client::new(window, rect);
         let id = self.display.add(client);
 
-        self.adapter.request(&x::ChangeWindowAttributes {
+        conn.send_and_check_request(&x::ChangeWindowAttributes {
             window: window,
             value_list: &[xcb::x::Cw::EventMask(
-                x::EventMask::ENTER_WINDOW | x::EventMask::FOCUS_CHANGE,
+                x::EventMask::ENTER_WINDOW,
             )],
-        });
+        })?;
+
+        let mid = self.display.get_focus().unwrap();
 
         /* TODO: support empty output */
-        Event::ClientCreate(self.display.focus.unwrap(), id)
+        Ok(Event::ClientCreate(mid, id))
+    }
+
+    fn enter(&mut self, conn: &mut Connection<T>, e: &x::EnterNotifyEvent) -> Result<Event<T>, Error> {
+        let window = e.event();
+
+        let focus = self.display.iter()
+            .find_map(|(mid, mon)| {
+                mon.find(window).map(|cid| {
+                    (mid, cid)
+                })
+            });
+
+        if let Some((mid, cid)) = focus {
+            self.display.set_focus(conn, mid, cid)?;
+        }
+
+        Ok(Event::Empty)
     }
 
     /// handle a ConfigureRequestEvent, which is a request to configure a window's properties
-    fn configure(&mut self, event: &x::ConfigureRequestEvent) -> Result<Event<T>, Error> {
+    fn configure(&mut self, conn: &mut Connection<T>, event: &x::ConfigureRequestEvent) -> Result<Event<T>, Error> {
         let mask = event.value_mask();
         let mut values = Vec::with_capacity(7);
 
@@ -355,9 +382,7 @@ impl<T: Copy> WindowManager<T> {
             values.push(x::ConfigWindow::StackMode(event.stack_mode()));
         }
 
-        self.adapter
-            .conn
-            .send_and_check_request(&x::ConfigureWindow {
+        conn.raw.send_and_check_request(&x::ConfigureWindow {
                 window: event.window(),
                 value_list: values.as_slice(),
             })?;
@@ -366,14 +391,14 @@ impl<T: Copy> WindowManager<T> {
     }
 
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
-    fn map(&mut self, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
+    fn map(&mut self, conn: &mut Connection<T>, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
         let client = self
             .display
             .iter()
             .find_map(|(_, view)| view.find(e.window()));
 
         if client.is_none() {
-            Ok(self.manage(e.window()))
+            self.manage(conn, e.window())
         } else {
             Ok(Event::Empty)
         }
@@ -385,7 +410,7 @@ impl<T: Copy> WindowManager<T> {
     }
 
     /// handle the DestroyNotify, which notifies us that a window has been destroyed
-    fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
+    fn destroy(&mut self, _: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::display::MonitorId;
 use crate::error::Error;
 use crate::keysym;
-use crate::wm::Adapter;
+use crate::wm::Connection;
 
 use bitflags::bitflags;
 use xcb::x::{self, Keycode, Keysym};
@@ -63,7 +63,7 @@ impl<'a> Iterator for KeycodeIterator<'a> {
 }
 
 impl KeyMap {
-    pub fn new(conn: &xcb::Connection) -> Result<Self, Error> {
+    pub fn new<T>(conn: &mut Connection<T>) -> Result<Self, Error> {
         let setup = conn.get_setup();
         let min = setup.min_keycode();
         let max = setup.max_keycode();
@@ -201,7 +201,7 @@ pub struct Keys<T: Copy> {
 }
 
 impl<T: Copy> Keys<T> {
-    pub fn new(conn: &xcb::Connection, root: x::Window) -> Result<Self, Error> {
+    pub fn new(conn: &mut Connection<T>, root: x::Window) -> Result<Self, Error> {
         /* TODO: support refreshing mappings */
         let mut keymap = KeyMap::new(conn)?;
 
@@ -220,10 +220,10 @@ impl<T: Copy> Keys<T> {
     }
 
     #[inline]
-    fn grab(&self, adapter: &mut Adapter<T>, modifiers: Modifier, keycode: Keycode) {
+    fn grab(&self, conn: &mut Connection<T>, modifiers: Modifier, keycode: Keycode) -> xcb::VoidCookieChecked {
         let m = unsafe { x::ModMask::from_bits_unchecked(modifiers.bits()) };
 
-        adapter.request(&x::GrabKey {
+        conn.send_request_checked(&x::GrabKey {
             owner_events: true,
             grab_window: self.root,
             modifiers: m,
@@ -233,8 +233,11 @@ impl<T: Copy> Keys<T> {
         })
     }
 
-    pub fn bind(&mut self, adapter: &mut Adapter<T>, binding: &Binding<T>) -> Result<(), Error> {
+    pub fn bind(&mut self, conn: &mut Connection<T>, binding: &Binding<T>) -> Result<(), Error> {
+        let mut cookies = Vec::with_capacity(8);
+
         for kc in self.keymap.keycodes(binding.keysym) {
+
             match binding.press {
                 Press::Press => {
                     self.bindings
@@ -263,27 +266,31 @@ impl<T: Copy> Keys<T> {
 
             match binding.mask {
                 Modifier::ANY => {
-                    self.grab(adapter, Modifier::ANY, kc);
+                    self.grab(conn, Modifier::ANY, kc);
                 }
                 _ => {
-                    self.grab(adapter, binding.mask, kc);
-                    self.grab(adapter, binding.mask | self.num_lock, kc);
-                    self.grab(adapter, binding.mask | self.caps_lock, kc);
-                    self.grab(adapter, binding.mask | self.scroll_lock, kc);
-                    self.grab(adapter, binding.mask | self.caps_lock | self.num_lock, kc);
-                    self.grab(adapter, binding.mask | self.scroll_lock | self.num_lock, kc);
-                    self.grab(
-                        adapter,
-                        binding.mask | self.scroll_lock | self.caps_lock,
-                        kc,
-                    );
-                    self.grab(
-                        adapter,
-                        binding.mask | self.num_lock | self.scroll_lock | self.caps_lock,
-                        kc,
-                    );
+                    let mut cookie = self.grab(conn, binding.mask, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.num_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.caps_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.scroll_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.caps_lock | self.num_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.scroll_lock | self.num_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.scroll_lock | self.caps_lock, kc);
+                    cookies.push(cookie);
+                    cookie = self.grab(conn, binding.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
+                    cookies.push(cookie);
                 }
             }
+        }
+
+        for cookie in cookies {
+            conn.check_request(cookie)?;
         }
 
         Ok(())

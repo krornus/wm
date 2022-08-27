@@ -57,7 +57,6 @@ impl<T> TreeNode<T> {
 
     #[inline]
     pub fn next_sibling(&self) -> Option<usize> {
-        println!("{}.right = {:?}", self.index, self.right);
         self.right
     }
 
@@ -142,11 +141,6 @@ impl<T> Tree<T> {
     pub fn insert(&mut self, index: usize, value: T) -> usize {
         let child = self.orphan(value);
         self.adopt(index, child);
-
-        println!("parent: {:?}", self.get(index));
-        for child in self.children(index) {
-            println!("  child: {:?}", self.get(child));
-        }
 
         child
     }

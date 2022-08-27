@@ -1,9 +1,3 @@
-selmon:
-    if you open a client with no attached monitor, does this break
-
-client:
-    apply changes to client struct (i.e. visible) after cookie check
-
-
-stop using generational indexing for the tree
-    - we unwrap everywhere already
+adapter:
+    Remove? just externally store a reference to a xcb::Connection,
+    pass it as necessary.

@@ -4,7 +4,7 @@ use crate::layout::{Cell, Layout};
 use crate::rect::Rect;
 use crate::tag::TagSelection;
 use crate::tree;
-use crate::wm::Adapter;
+use crate::wm::Connection;
 
 use xcb::x;
 
@@ -92,12 +92,12 @@ impl WindowTree {
         }
     }
 
-    pub fn show<T>(&mut self, adapter: &mut Adapter<T>, index: usize, visible: bool) {
+    pub fn show<T>(&mut self, conn: &mut Connection<T>, index: usize, visible: bool) -> Result<(), Error> {
         let mut node = self.tree.get_mut(index);
 
         match node.value {
             Window::Client(ref mut client) => {
-                return client.show(adapter, visible);
+                return client.show(conn, visible);
             }
             _ => {}
         }
@@ -112,32 +112,34 @@ impl WindowTree {
 
             match node.value {
                 Window::Client(ref mut client) => {
-                    client.show(adapter, visible);
+                    client.show(conn, visible)?;
                 }
                 Window::Layout(_) => {
                     let id = node.index();
-                    self.show(adapter, id, visible);
+                    self.show(conn, id, visible)?;
                 }
             }
         }
+
+        Ok(())
     }
 
     pub fn arrange<'a, 'b, T>(
         &mut self,
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         mask: &TagSelection<'a, 'b>,
         rect: &Rect,
     ) -> Result<Option<usize>, Error> {
         if let Some(root) = self.tree.root() {
-            let cookie = adapter.conn.send_request(&x::GetInputFocus {});
+            let cookie = conn.send_request(&x::GetInputFocus {});
 
-            let masktree = MaskTree::new(adapter, self, mask, root);
+            let masktree = MaskTree::new(conn, self, mask, root)?;
 
-            let reply = adapter.conn.wait_for_reply(cookie)?;
+            let reply = conn.wait_for_reply(cookie)?;
 
             match masktree.root() {
                 Some(root) => {
-                    Ok(self.arrange_recursive(adapter, &masktree, root, rect, reply.focus()))
+                    self.arrange_recursive(conn, &masktree, root, rect, reply.focus())
                 }
                 None => {
                     Ok(None)
@@ -150,12 +152,12 @@ impl WindowTree {
 
     fn arrange_recursive<T>(
         &mut self,
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         masktree: &MaskTree,
         index: usize,
         rect: &Rect,
         active: x::Window,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, Error> {
 
         let mut focus = None;
 
@@ -202,30 +204,30 @@ impl WindowTree {
             match window.value {
                 Window::Client(ref mut client) => match &cells[i] {
                     Cell::Hide => {
-                        client.show(adapter, false);
+                        client.show(conn, false)?;
                     }
                     Cell::Show(r) => {
-                        client.show(adapter, true);
-                        client.resize(adapter, r);
+                        client.show(conn, true)?;
+                        client.resize(conn, r)?;
                     }
                     Cell::Focus(r) => {
                         focus = Some(i);
-                        client.focus(adapter);
-                        client.show(adapter, true);
-                        client.resize(adapter, r);
+                        client.focus(conn)?;
+                        client.show(conn, true)?;
+                        client.resize(conn, r)?;
                     }
                 },
                 Window::Layout(_) => {
                     /* node is dropped here via lexical scoping. */
                     match &cells[i] {
                         Cell::Hide => {
-                            self.show(adapter, node.value, false);
+                            self.show(conn, node.value, false)?;
                         }
                         Cell::Show(r) => {
-                            focus = self.arrange_recursive(adapter, masktree, id, r, active)
+                            focus = self.arrange_recursive(conn, masktree, id, r, active)?;
                         }
                         Cell::Focus(r) => {
-                            focus = self.arrange_recursive(adapter, masktree, id, r, active)
+                            focus = self.arrange_recursive(conn, masktree, id, r, active)?;
                         }
                     }
                 }
@@ -234,7 +236,7 @@ impl WindowTree {
             i += 1;
         }
 
-        focus
+        Ok(focus)
     }
 
     pub fn take(&mut self, mut other: WindowTree) {
@@ -255,19 +257,19 @@ struct MaskTree {
 
 impl MaskTree {
     fn new<'a, 'b, T>(
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         win: &mut WindowTree,
         mask: &TagSelection<'a, 'b>,
         index: usize,
-    ) -> MaskTree {
+    ) -> Result<MaskTree, Error> {
         let mut tree = MaskTree {
             tree: tree::Tree::new(),
         };
 
-        let root = tree.generate(adapter, win, mask, index);
+        let root = tree.generate(conn, win, mask, index)?;
         tree.tree.set_root(root);
 
-        tree
+        Ok(tree)
     }
 
     fn root(&self) -> Option<usize> {
@@ -276,11 +278,11 @@ impl MaskTree {
 
     fn generate<'a, 'b, T>(
         &mut self,
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         tree: &mut WindowTree,
         mask: &TagSelection<'a, 'b>,
         from: usize,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, Error> {
         /* construct a tree, bottom up, such that any nodes of the tree
          * which are masked out are excluded from the final product */
         let mut node = tree.tree.get_mut(from);
@@ -288,10 +290,10 @@ impl MaskTree {
         match node.value {
             Window::Client(ref mut client) => {
                 if client.mask(mask) {
-                    Some(self.tree.orphan(from))
+                    Ok(Some(self.tree.orphan(from)))
                 } else {
-                    client.show(adapter, false);
-                    None
+                    client.show(conn, false)?;
+                    Ok(None)
                 }
             }
             Window::Layout(_) => {
@@ -303,7 +305,7 @@ impl MaskTree {
                     node = tree.tree.get_mut(id);
                     child = node.next_sibling();
 
-                    match self.generate(adapter, tree, mask, id) {
+                    match self.generate(conn, tree, mask, id)? {
                         Some(orphan) => {
                             children = true;
                             self.tree.adopt(parent, orphan);
@@ -313,10 +315,10 @@ impl MaskTree {
                 }
 
                 if children {
-                    Some(parent)
+                    Ok(Some(parent))
                 } else {
                     self.tree.remove(parent);
-                    None
+                    Ok(None)
                 }
             }
         }

@@ -1,5 +1,7 @@
 use std::fmt;
 
+use xcb::x;
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Point {
     pub x: i16,
@@ -163,6 +165,28 @@ impl Contains<Rect> for Rect {
     fn contains(&self, other: &Rect) -> bool {
         self.contains(&other.corner(Corner::TopLeft))
             && self.contains(&other.corner(Corner::BottomRight))
+    }
+}
+
+impl From<Rect> for x::Rectangle {
+    fn from(rect: Rect) -> Self {
+        x::Rectangle {
+            x: rect.x,
+            y: rect.y,
+            width: rect.w,
+            height: rect.h,
+        }
+    }
+}
+
+impl From<&Rect> for x::Rectangle {
+    fn from(rect: &Rect) -> Self {
+        x::Rectangle {
+            x: rect.x,
+            y: rect.y,
+            width: rect.w,
+            height: rect.h,
+        }
     }
 }
 

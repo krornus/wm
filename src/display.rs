@@ -7,13 +7,13 @@ use crate::rect::Rect;
 use crate::slab::{self, Slab, SlabIndex};
 use crate::tag::TagSelection;
 use crate::window::{Window, WindowTree};
-use crate::wm::{Adapter, Event};
+use crate::wm::{Connection, Event};
 
 use xcb::{randr, x};
 
 /// Get a vector of all monitors with active outputs
-fn monitors(
-    conn: &xcb::Connection,
+fn monitors<T>(
+    conn: &Connection<T>,
     root: x::Window,
 ) -> Result<(Vec<Monitor>, Option<usize>), Error> {
     let cookie = conn.send_request(&randr::GetScreenResourcesCurrent { window: root });
@@ -101,8 +101,8 @@ pub struct Monitor {
 }
 
 impl Monitor {
-    fn new(
-        conn: &xcb::Connection,
+    fn new<T>(
+        conn: &Connection<T>,
         root: x::Window,
         info: &randr::MonitorInfo,
     ) -> Result<Self, Error> {
@@ -124,23 +124,26 @@ impl Monitor {
         })
     }
 
+    pub fn get_rect(&mut self) -> &Rect {
+        &self.rect
+    }
+
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.rect = rect;
+    }
+
     #[inline]
     pub fn arrange<'a, 'b, T>(
         &mut self,
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         mask: &TagSelection<'a, 'b>,
     ) -> Result<(), Error> {
-        match self.tree.arrange(adapter, mask, &self.rect)? {
+        match self.tree.arrange(conn, mask, &self.rect)? {
             Some(focus) => self.focus = focus,
             None => { },
         }
 
         Ok(())
-    }
-
-    #[inline]
-    pub fn rect(&self) -> &Rect {
-        &self.rect
     }
 
     #[inline]
@@ -190,11 +193,11 @@ pub struct Display {
     root: x::Window,
     monitors: Slab<Monitor>,
     primary: Option<MonitorId>,
-    pub focus: Option<MonitorId>,
+    focus: Option<MonitorId>,
 }
 
 impl Display {
-    pub fn new<T>(adapter: &mut Adapter<T>, root: x::Window) -> Result<Self, Error> {
+    pub fn new<T>(conn: &mut Connection<T>, root: x::Window) -> Result<Self, Error> {
         let mut display = Display {
             root: root,
             monitors: Slab::new(),
@@ -202,7 +205,7 @@ impl Display {
             focus: None,
         };
 
-        display.update(adapter)?;
+        display.update(conn)?;
 
         Ok(display)
     }
@@ -219,30 +222,29 @@ impl Display {
         id
     }
 
-    fn set_primary<T>(&mut self, adapter: &mut Adapter<T>, id: MonitorId) {
+    fn set_primary<T>(&mut self, conn: &mut Connection<T>, id: MonitorId) {
         if self.primary != Some(id) {
             self.primary = Some(id);
-            adapter.push(Event::MonitorPrimary(id));
+            conn.push(Event::MonitorPrimary(id));
         }
     }
 
     pub fn reconfigure<T>(
         &mut self,
-        adapter: &mut Adapter<T>,
+        conn: &mut Connection<T>,
         window: x::Window,
     ) -> Result<(), Error> {
-        let cookie = adapter
-            .conn
+        let cookie = conn
             .send_request(&randr::GetScreenInfo { window: window });
 
-        adapter.conn.wait_for_reply(cookie)?;
+        conn.wait_for_reply(cookie)?;
 
         Ok(())
     }
 
-    pub fn update<T>(&mut self, adapter: &mut Adapter<T>) -> Result<(), Error> {
+    pub fn update<T>(&mut self, conn: &mut Connection<T>) -> Result<(), Error> {
         /* get all connected monitors, with the index of the primary monitor */
-        let (monitors, primary) = monitors(&adapter.conn, self.root)?;
+        let (monitors, primary) = monitors(&conn, self.root)?;
 
         /* now iterate through the result, looking to pre-existing monitors */
         for (i, new) in monitors.into_iter().enumerate() {
@@ -253,12 +255,12 @@ impl Display {
                 if new.name == monitor.name {
                     if new.rect != monitor.rect {
                         monitor.rect = new.rect;
-                        adapter.push(Event::MonitorResize(MonitorId { index }));
+                        conn.push(Event::MonitorResize(MonitorId { index }));
                     }
 
                     /* optionally update the primary monitor to this one */
                     if primary == Some(i) {
-                        self.set_primary(adapter, MonitorId { index });
+                        self.set_primary(conn, MonitorId { index });
                     }
 
                     added = false;
@@ -271,10 +273,10 @@ impl Display {
                  * here we need to check for primary monitor again */
                 let id = self.insert(new);
 
-                adapter.push(Event::MonitorConnect(id));
+                conn.push(Event::MonitorConnect(id));
 
                 if primary == Some(i) {
-                    self.set_primary(adapter, id);
+                    self.set_primary(conn, id);
                 }
             }
         }
@@ -303,13 +305,67 @@ impl Display {
         self.monitors.get_mut(&id.index)
     }
 
-    #[inline]
-    pub fn iter(&self) -> slab::Iter<'_, Monitor> {
-        self.monitors.iter()
+    pub fn set_focus<T>(&mut self, conn: &mut Connection<T>, id: MonitorId, client: usize) -> Result<(), Error> {
+        match self.get_mut(id) {
+            Some(mon) => {
+                match mon.get_mut(client) {
+                    Some(c) => {
+                        c.focus(conn)?;
+                        mon.focus = client;
+                    }
+                    None => {},
+                };
+            }
+            None => {},
+        }
+
+        Ok(())
     }
 
     #[inline]
-    pub fn iter_mut(&mut self) -> slab::IterMut<'_, Monitor> {
-        self.monitors.iter_mut()
+    pub fn get_focus(&mut self) -> Option<MonitorId> {
+        self.focus
+    }
+
+    #[inline]
+    pub fn iter(&self) -> Iter<'_> {
+        Iter {
+            iter: self.monitors.iter()
+        }
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
+        IterMut {
+            iter: self.monitors.iter_mut()
+        }
+    }
+}
+
+pub struct Iter<'a> {
+    iter: slab::Iter<'a, Monitor>
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item =  (MonitorId, &'a Monitor);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(i,m)| {
+            (MonitorId { index: i }, m)
+        })
+    }
+}
+
+pub struct IterMut<'a> {
+    iter: slab::IterMut<'a, Monitor>
+}
+
+impl<'a> Iterator for IterMut<'a> {
+    type Item =  (MonitorId, &'a mut Monitor);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(i,m)| {
+            (MonitorId { index: i }, m)
+        })
     }
 }

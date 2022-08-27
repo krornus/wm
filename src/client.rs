@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use crate::rect::Rect;
 use crate::tag::{TagMask, TagSelection, TagSetId};
-use crate::wm::Adapter;
+use crate::wm::Connection;
+use crate::error::Error;
 
 use xcb::x;
 
@@ -40,36 +41,43 @@ impl Client {
         }
     }
 
-    pub fn show<T>(&mut self, adapter: &mut Adapter<T>, visible: bool) {
+    pub fn show<T>(&mut self, conn: &mut Connection<T>, visible: bool) -> Result<(), Error> {
         if self.visible != visible {
             self.visible = visible;
 
-            if visible {
-                adapter.request(&x::MapWindow {
+            let cookie = if visible {
+                conn.send_request_checked(&x::MapWindow {
                     window: self.window,
-                });
+                })
             } else {
-                adapter.request(&x::UnmapWindow {
+                conn.send_request_checked(&x::UnmapWindow {
                     window: self.window,
-                });
-            }
+                })
+            };
+
+            conn.check_request(cookie)?;
         }
+
+        Ok(())
     }
 
-    pub fn focus<T>(&mut self, adapter: &mut Adapter<T>) {
-        println!("focus: {:?}", self.window);
-        adapter.request(&x::SetInputFocus {
+    pub fn focus<T>(&mut self, conn: &mut Connection<T>) -> Result<(), Error> {
+        let cookie = conn.send_request_checked(&x::SetInputFocus {
             revert_to: x::InputFocus::PointerRoot,
             focus: self.window,
             time: x::CURRENT_TIME,
         });
+
+        conn.check_request(cookie)?;
+
+        Ok(())
     }
 
-    pub fn resize<T>(&mut self, adapter: &mut Adapter<T>, rect: &Rect) {
+    pub fn resize<T>(&mut self, conn: &mut Connection<T>, rect: &Rect) -> Result<(), Error> {
         if &self.rect != rect {
             self.rect = *rect;
 
-            adapter.request(&x::ConfigureWindow {
+            let cookie = conn.send_request_checked(&x::ConfigureWindow {
                 window: self.window,
                 value_list: &[
                     x::ConfigWindow::X(self.rect.x as i32),
@@ -78,7 +86,11 @@ impl Client {
                     x::ConfigWindow::Height(self.rect.h as u32),
                 ],
             });
+
+            conn.check_request(cookie)?;
         }
+
+        Ok(())
     }
 
     pub fn mask<'a, 'b>(&self, mask: &TagSelection<'a, 'b>) -> bool {
