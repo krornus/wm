@@ -58,8 +58,10 @@ struct MonitorInfo {
 }
 
 impl MonitorInfo {
+    const BAR_HEIGHT: u16 = 30;
+
     fn connect(rect: &Rect) -> Self {
-        let (bar, window) = rect.cut(Cut::Horizontal(20));
+        let (bar, window) = rect.cut(Cut::Horizontal(MonitorInfo::BAR_HEIGHT));
 
         MonitorInfo {
             bar: bar,
@@ -74,7 +76,7 @@ impl MonitorInfo {
     }
 
     fn resize(&mut self, rect: &Rect) {
-        let (bar, window) = rect.cut(Cut::Horizontal(20));
+        let (bar, window) = rect.cut(Cut::Horizontal(MonitorInfo::BAR_HEIGHT));
 
         self.bar = bar;
         self.window = window;
@@ -236,11 +238,11 @@ impl Manager {
                 },
                 wm::Event::MonitorResize(id) => {
                     let monitor = self.wm.get_mut(id).unwrap();
-                    let rect = monitor.get_rect();
 
                     let info = self.monitors.get_mut(&id).unwrap();
-                    info.resize(rect);
+                    let rect = monitor.get_rect();
 
+                    info.resize(rect);
                     monitor.set_rect(info.window);
 
                     self.arrange()?;
