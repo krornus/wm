@@ -127,7 +127,7 @@ pub enum Press {
 }
 
 pub struct Binding<T: Copy> {
-    pub view: Option<MonitorId>,
+    pub monitor: Option<MonitorId>,
     pub mask: Modifier,
     pub keysym: Keysym,
     pub press: Press,
@@ -136,14 +136,14 @@ pub struct Binding<T: Copy> {
 
 #[derive(Clone)]
 struct BindValue<T: Copy> {
-    view: Option<MonitorId>,
+    monitor: Option<MonitorId>,
     value: T,
 }
 
 impl<T: Copy> From<&Binding<T>> for BindValue<T> {
     fn from(binding: &Binding<T>) -> Self {
         BindValue {
-            view: binding.view,
+            monitor: binding.monitor,
             value: binding.value,
         }
     }
@@ -165,10 +165,10 @@ impl<T: Copy> BindingSet<T> {
     fn bind(&mut self, binding: &Binding<T>) {
         let value = BindValue::from(binding);
 
-        if binding.view.is_none() {
+        if binding.monitor.is_none() {
             self.global = Some(value);
         } else {
-            let at = self.local.iter().position(|x| x.view == binding.view);
+            let at = self.local.iter().position(|x| x.monitor == binding.monitor);
 
             match at {
                 Some(i) => {
@@ -181,8 +181,8 @@ impl<T: Copy> BindingSet<T> {
         }
     }
 
-    fn get(&self, view: Option<MonitorId>) -> Option<T> {
-        let at = view.and_then(|id| self.local.iter().position(|x| x.view == Some(id)));
+    fn get(&self, monitor: Option<MonitorId>) -> Option<T> {
+        let at = monitor.and_then(|id| self.local.iter().position(|x| x.monitor == Some(id)));
 
         match at {
             Some(i) => Some(self.local[i].value),

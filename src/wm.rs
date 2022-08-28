@@ -58,6 +58,26 @@ impl<T> Connection<T> {
     }
 
     #[inline]
+    pub fn raw(&self) -> &xcb::Connection {
+        &self.raw
+    }
+
+    #[inline]
+    pub fn raw_mut(&mut self) -> &mut xcb::Connection {
+        &mut self.raw
+    }
+
+    #[inline]
+    pub fn screen(&self) -> usize {
+        self.screen
+    }
+
+    #[inline]
+    pub fn root(&self) -> x::Window {
+        self.root
+    }
+
+    #[inline]
     pub fn get_setup(&self) -> &x::Setup {
         self.raw.get_setup()
     }
@@ -147,7 +167,7 @@ impl<T: Copy> WindowManager<T> {
         })
         .map_err(|_| Error::AlreadyRunning)?;
 
-        let painter = Painter::new(conn, root, screen.default_colormap())?;
+        let painter = Painter::new(conn, root)?;
         let tags = Tags::new();
         let keys = Keys::new(conn, root)?;
 
@@ -306,12 +326,26 @@ impl<T: Copy> WindowManager<T> {
         self.display.get_focus()
     }
 
+    #[inline]
+    pub fn display(&mut self) -> &Display {
+        &self.display
+    }
+
+    #[inline]
+    pub fn display_mut(&mut self) -> &mut Display {
+        &mut self.display
+    }
+
     pub fn get_focus(&mut self) -> Option<(MonitorId, usize)> {
         self.get_monitor()
           .and_then(|focus| match self.get(focus) {
               Some(mon) => Some((focus, mon.focus)),
               None => None,
           })
+    }
+
+    pub fn get_painter_mut(&mut self) -> &mut Painter {
+        &mut self.painter
     }
 }
 
