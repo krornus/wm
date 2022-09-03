@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::slab::{Slab, SlabIndex};
+use crate::slab::{self, Slab, SlabIndex};
 
 use bitvec::prelude::*;
 
@@ -22,6 +22,10 @@ impl TagSet {
         TagSet {
             tags: tags.iter().map(|x| String::from(x.as_ref())).collect(),
         }
+    }
+
+    pub fn tags(&self) -> &[String] {
+        &self.tags
     }
 }
 
@@ -53,8 +57,23 @@ impl TagMask {
     }
 
     #[inline]
+    pub fn len(&self) -> usize {
+        self.mask.len()
+    }
+
+    #[inline]
     pub fn clear(&mut self) {
         self.mask.clear()
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> bool {
+        *self.mask.get(index).as_deref()
+            .unwrap_or(&false)
+    }
+
+    pub fn iter(&self) -> bitvec::slice::BitRefIter<'_, usize, Lsb0> {
+        self.mask.iter().by_refs()
     }
 
     #[inline]
@@ -75,6 +94,14 @@ impl Tags {
             tagsets: Slab::new(),
             tagmasks: HashMap::new(),
         }
+    }
+
+    pub fn tagsets<'a>(&'a self) -> slab::Iter<'a, TagSet> {
+        self.tagsets.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.tagsets.len()
     }
 
     pub fn insert(&mut self, tagset: TagSet) -> TagSetId {

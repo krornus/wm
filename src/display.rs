@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use std::ops::{Index, IndexMut};
 
 use crate::client::Client;
 use crate::error::Error;
-use crate::layout::LeftMaster;
+use crate::layout::{Layout, LeftMaster};
 use crate::rect::Rect;
 use crate::slab::{self, Slab, SlabIndex};
 use crate::tag::TagSelection;
-use crate::window::{Window, WindowTree};
+use crate::window::{WindowTree, ClientId, LayoutId};
 use crate::wm::{Connection, Event};
 
 use xcb::{randr, x};
@@ -91,11 +92,14 @@ fn monitors<T>(
     Ok((monitors, primary))
 }
 
+/// A Monitor is a combination of a WindowTree and an actual monitor output.
+/// It mostly mirrors the WindowTree API, but adds some metadata relating
+/// to the actual monitor such as size and name.
 pub struct Monitor {
     window: x::Window,
     name: String,
     primary: bool,
-    pub focus: usize,
+    pub focus: Option<ClientId>,
     rect: Rect,
     tree: WindowTree,
 }
@@ -118,7 +122,7 @@ impl Monitor {
             window: root,
             name: name,
             primary: info.primary(),
-            focus: tree.root(),
+            focus: None,
             rect: rect,
             tree: tree,
         })
@@ -131,49 +135,74 @@ impl Monitor {
     pub fn set_rect(&mut self, rect: Rect) {
         self.rect = rect;
     }
+}
 
+impl Monitor {
     #[inline]
     pub fn arrange<'a, 'b, T>(
         &mut self,
         conn: &mut Connection<T>,
         mask: &TagSelection<'a, 'b>,
     ) -> Result<(), Error> {
-        match self.tree.arrange(conn, mask, &self.rect)? {
-            Some(focus) => self.focus = focus,
-            None => { },
-        }
-
+        self.focus = self.tree.arrange(conn, mask, &self.rect)?;
         Ok(())
     }
 
+    fn focused_layout(&self) -> LayoutId {
+        match self.focus {
+            /* clients are guarenteed to have a parent */
+            Some(client) => self.tree.parent(client).unwrap(),
+            None => self.tree.root(),
+        }
+    }
+
     #[inline]
-    pub fn find(&self, window: x::Window) -> Option<usize> {
+    pub fn client(&mut self, client: Client) -> ClientId {
+        self.tree.client(self.focused_layout(), client)
+    }
+
+    #[inline]
+    pub fn layout(&mut self, layout: impl Layout + 'static) -> LayoutId {
+        self.tree.layout(self.focused_layout(), layout)
+    }
+
+    #[inline]
+    pub fn find(&self, window: x::Window) -> Option<ClientId> {
         self.tree.find(window)
     }
+}
+
+
+impl Index<ClientId> for Monitor {
+    type Output = Client;
 
     #[inline]
-    pub fn add(&mut self, client: Client) -> usize {
-        self.tree.insert(self.focus, Window::Client(client))
+    fn index(&self, index: ClientId) -> &Self::Output {
+        &self.tree[index]
     }
+}
 
+impl IndexMut<ClientId> for Monitor {
     #[inline]
-    pub fn get(&self, id: usize) -> Option<&Client> {
-        self.tree.get(id)
+    fn index_mut(&mut self, index: ClientId) -> &mut Self::Output {
+        &mut self.tree[index]
     }
+}
+
+
+impl Index<LayoutId> for Monitor {
+    type Output = dyn Layout;
 
     #[inline]
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut Client> {
-        self.tree.get_mut(id)
+    fn index(&self, index: LayoutId) -> &Self::Output {
+        &self.tree[index]
     }
+}
 
+impl IndexMut<LayoutId> for Monitor {
     #[inline]
-    pub fn next(&self, id: usize) -> Option<usize> {
-        self.tree.next(id)
-    }
-
-    #[inline]
-    pub fn previous(&self, id: usize) -> Option<usize> {
-        self.tree.previous(id)
+    fn index_mut(&mut self, index: LayoutId) -> &mut Self::Output {
+        &mut self.tree[index]
     }
 }
 
@@ -181,12 +210,6 @@ impl Monitor {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct MonitorId {
     index: SlabIndex,
-}
-
-impl From<SlabIndex> for MonitorId {
-    fn from(i: SlabIndex) -> Self {
-        MonitorId { index: i }
-    }
 }
 
 pub struct Display {
@@ -287,12 +310,12 @@ impl Display {
 
 impl Display {
     #[inline]
-    pub fn add(&mut self, client: Client) -> usize {
+    pub fn client(&mut self, client: Client) -> ClientId {
         /* TODO: support missing output */
         let focus = self.focus.expect("no output available");
         let output = self.monitors.get_mut(&focus.index).unwrap();
 
-        output.add(client)
+        output.client(client)
     }
 
     #[inline]
@@ -305,16 +328,11 @@ impl Display {
         self.monitors.get_mut(&id.index)
     }
 
-    pub fn set_focus<T>(&mut self, conn: &mut Connection<T>, id: MonitorId, client: usize) -> Result<(), Error> {
+    pub fn set_focus<T>(&mut self, conn: &mut Connection<T>, id: MonitorId, client: ClientId) -> Result<(), Error> {
         match self.get_mut(id) {
             Some(mon) => {
-                match mon.get_mut(client) {
-                    Some(c) => {
-                        c.focus(conn)?;
-                        mon.focus = client;
-                    }
-                    None => {},
-                };
+                mon[client].focus(conn)?;
+                mon.focus = Some(client);
             }
             None => {},
         }

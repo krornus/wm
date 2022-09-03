@@ -44,9 +44,9 @@ impl Colorscheme {
         let painter = wm.get_painter_mut();
 
         Ok(Colorscheme {
-            focus: painter.color(conn, 80, 250, 123)?,
-            unfocus: painter.black(),
-            text: painter.black(),
+            focus: painter.color(conn, 55, 146, 237)?,
+            unfocus: painter.color(conn, 22, 22, 22)?,
+            text: painter.white(),
         })
     }
 }
@@ -58,7 +58,7 @@ struct MonitorInfo {
 }
 
 impl MonitorInfo {
-    const BAR_HEIGHT: u16 = 30;
+    const BAR_HEIGHT: u16 = 22;
 
     fn connect(rect: &Rect) -> Self {
         let (bar, window) = rect.cut(Cut::Horizontal(MonitorInfo::BAR_HEIGHT));
@@ -170,6 +170,51 @@ impl Manager {
         Ok(())
     }
 
+    fn draw(&mut self, id: MonitorId) -> Result<(), error::Error> {
+        let info = &self.monitors[&id];
+        let painter = self.wm.get_painter_mut();
+
+        for (id, tagset) in self.tags.tagsets() {
+            let mask = self.tags.mask(id).unwrap();
+
+            let mut bar = info.bar;
+
+            for (i, tag) in tagset.tags().iter().enumerate() {
+
+                let (cell, rest) = bar.cut(Cut::Vertical(20));
+                bar = rest;
+
+                if mask.get(i) {
+                    println!("tag[{}] - {} -> on", i, tag);
+                    painter.brush(
+                        &mut self.conn,
+                        self.colorscheme.focus,
+                        self.colorscheme.unfocus)?;
+                } else {
+                    println!("tag[{}] - {} -> off", i, tag);
+                    painter.brush(
+                        &mut self.conn,
+                        self.colorscheme.unfocus,
+                        self.colorscheme.focus)?;
+                }
+
+                painter.rect(&mut self.conn, &cell)?;
+
+                break;
+            }
+
+            painter.brush(
+                &mut self.conn,
+                self.colorscheme.focus,
+                self.colorscheme.unfocus)?;
+
+            let (cell, bar) = bar.cut(Cut::Vertical(15));
+            painter.rect(&mut self.conn, &bar)?;
+        }
+
+        Ok(())
+    }
+
     fn run(&mut self) -> Result<(), error::Error> {
         self.wm.bind(&mut self.conn, &keyboard::Binding {
             monitor: None,
@@ -224,6 +269,8 @@ impl Manager {
                     monitor.set_rect(info.window);
                     self.monitors.insert(id, info);
 
+                    self.draw(id)?;
+
                     self.bindtag(keysym::a, id, uid, 0)?;
                     self.bindtag(keysym::s, id, uid, 1)?;
                     self.bindtag(keysym::d, id, uid, 2)?;
@@ -244,6 +291,7 @@ impl Manager {
 
                     info.resize(rect);
                     monitor.set_rect(info.window);
+                    self.draw(id)?;
 
                     self.arrange()?;
                 }
@@ -254,60 +302,87 @@ impl Manager {
                     let mask = self.tags.masks().clone();
 
                     self.wm.get_mut(mid)
-                        .and_then(|mon| mon.get_mut(cid))
-                        .map(|client| client.set_mask(mask));
+                        .map(|mon| {
+                            let client = &mut mon[cid];
+                            client.set_mask(mask)
+                        });
 
                     self.arrange()?;
+                    self.draw(mid)?;
                 }
-                wm::Event::UserEvent(Event::MonitorSet(_, tagset, tag)) => {
+                wm::Event::UserEvent(Event::MonitorSet(id, tagset, tag)) => {
                     self.tags.mask_mut(tagset).map(|mask| {
                         mask.clear();
                         mask.set(tag);
                     });
 
                     self.arrange()?;
+                    self.draw(id)?;
                 }
-                wm::Event::UserEvent(Event::MonitorUpdate(_, tagset, tag)) => {
+                wm::Event::UserEvent(Event::MonitorUpdate(id, tagset, tag)) => {
                     self.tags.mask_mut(tagset).map(|mask| {
                         mask.set(tag);
                     });
 
                     self.arrange()?;
+                    self.draw(id)?;
                 }
                 wm::Event::UserEvent(Event::ClientSet(tagset, tag)) => {
                     self.wm.get_monitor()
-                        .and_then(|f| self.wm.get_mut(f))
-                        .and_then(|v| v.get_mut(v.focus))
-                        .and_then(|c| c.get_mask_mut(tagset))
+                        .and_then(|mid| self.wm.get_mut(mid))
+                        .and_then(|mon| {
+                            mon.focus.and_then(move |focus| {
+                                mon[focus].get_mask_mut(tagset)
+                            })
+                        })
                         .map(|t| {
                             t.clear();
                             t.set(tag);
                         });
 
                     self.arrange()?;
+
+                    if let Some(id) = self.wm.get_monitor() {
+                        self.draw(id)?;
+                    }
                 }
                 wm::Event::UserEvent(Event::ClientUpdate(tagset, tag)) => {
                     self.wm.get_monitor()
                         .and_then(|focus| self.wm.get_mut(focus))
-                        .and_then(|mon| mon.get_mut(mon.focus))
-                        .and_then(|client| client.get_mask_mut(tagset))
+                        .and_then(|mon| {
+                            mon.focus.and_then(move |focus| {
+                                mon[focus].get_mask_mut(tagset)
+                            })
+                        })
                         .map(|mask| mask.set(tag));
 
                     self.arrange()?;
-                }
-                wm::Event::UserEvent(Event::FocusNext) => {
-                    self.wm.get_monitor()
-                        .and_then(|f| self.wm.get(f).map(|v| (f, v)))
-                        .and_then(|(f, v)| v.next(v.focus).map(|c| (f, c)))
-                        .map(|(f, c)| self.wm.display_mut().set_focus(&mut self.conn, f, c));
-                }
-                wm::Event::UserEvent(Event::FocusPrevious) => {
-                    if let Some(mid) =  self.wm.get_monitor() {
-                        self.wm.get(mid)
-                            .and_then(|mon| mon.previous(mon.focus))
-                            .map(|cid| self.wm.display_mut().set_focus(&mut self.conn, mid, cid));
+
+                    if let Some(id) = self.wm.get_monitor() {
+                        self.draw(id)?;
                     }
                 }
+                // wm::Event::UserEvent(Event::FocusNext) => {
+                //     self.wm.get_monitor()
+                //         .and_then(|f| self.wm.get(f).map(|v| (f, v)))
+                //         .and_then(|(f, v)| v.next(v.focus).map(|c| (f, c)))
+                //         .map(|(f, c)| self.wm.display_mut().set_focus(&mut self.conn, f, c));
+
+                //     if let Some(id) = self.wm.get_monitor() {
+                //         self.draw(id)?;
+                //     }
+                // }
+                // wm::Event::UserEvent(Event::FocusPrevious) => {
+                //     if let Some(mid) =  self.wm.get_monitor() {
+                //         self.wm.get(mid)
+                //             .and_then(|mon| mon.previous(mon.focus))
+                //             .map(|cid| self.wm.display_mut().set_focus(&mut self.conn, mid, cid));
+                //     }
+
+                //     if let Some(id) = self.wm.get_monitor() {
+                //         self.draw(id)?;
+                //     }
+                // }
                 wm::Event::UserEvent(Event::Exit) => {
                     break Ok(());
                 }

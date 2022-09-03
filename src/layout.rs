@@ -12,7 +12,7 @@ pub trait Layout {
 }
 
 #[derive(Debug, Clone)]
-pub struct Monacle {}
+pub struct Monacle { }
 
 impl Monacle {
     pub fn new() -> Self {

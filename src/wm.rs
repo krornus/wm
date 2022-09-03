@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::client::Client;
 use crate::display::{Display, Monitor, MonitorId};
+use crate::window::{ClientId, LayoutId};
 use crate::error::Error;
 use crate::keyboard::{Binding, Keys};
 use crate::rect::Rect;
@@ -22,8 +23,8 @@ pub enum Event<T> {
     MonitorResize(MonitorId),
     MonitorDisconnect(MonitorId),
     MonitorPrimary(MonitorId),
-    ClientCreate(MonitorId, usize),
-    ClientDestroy(usize),
+    ClientCreate(MonitorId, ClientId),
+    ClientDestroy(ClientId),
     UserEvent(T),
 }
 
@@ -336,10 +337,12 @@ impl<T: Copy> WindowManager<T> {
         &mut self.display
     }
 
-    pub fn get_focus(&mut self) -> Option<(MonitorId, usize)> {
+    pub fn get_focus(&mut self) -> Option<(MonitorId, ClientId)> {
         self.get_monitor()
-          .and_then(|focus| match self.get(focus) {
-              Some(mon) => Some((focus, mon.focus)),
+          .and_then(|mid| match self.get(mid) {
+              Some(mon) => {
+                  mon.focus.map(|cid| (mid, cid))
+              }
               None => None,
           })
     }
@@ -353,7 +356,7 @@ impl<T: Copy> WindowManager<T> {
     fn manage(&mut self, conn: &mut Connection<T>, window: x::Window) -> Result<Event<T>, Error> {
         let rect = Rect::new(0, 0, 0, 0);
         let client = Client::new(window, rect);
-        let id = self.display.add(client);
+        let id = self.display.client(client);
 
         conn.send_and_check_request(&x::ChangeWindowAttributes {
             window: window,
@@ -393,7 +396,10 @@ impl<T: Copy> WindowManager<T> {
         let client = self
             .display
             .iter()
-            .find_map(|(_, view)| view.find(event.window()).and_then(|id| view.get(id)));
+            .find_map(|(_, mon)| {
+                mon.find(event.window())
+                    .and_then(move |id| Some(&mon[id]))
+            });
 
         let rect = if let Some(c) = client {
             *c.rect()

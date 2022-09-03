@@ -32,6 +32,11 @@ impl<T> Slab<T> {
         }
     }
 
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.slab.len()
+    }
+
     pub fn insert(&mut self, value: T) -> SlabIndex {
         let sv = SlabValue {
             value: value,
