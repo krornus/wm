@@ -214,7 +214,7 @@ impl WindowTree {
         let mut node = self.tree.get_mut(index.inner);
 
         match node.value {
-            Window::Client(ref mut client) => {
+            Window::Client(_) => {
                 panic!("WindowTree: invalid layout id");
             }
             _ => {
@@ -399,6 +399,78 @@ impl WindowTree {
     pub fn parent<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
         self.tree.get(i.as_raw()).parent()
             .map(|x| LayoutId::from(x))
+    }
+
+    pub fn next_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+        let mut node = self.tree.get(i.as_raw());
+
+        loop {
+            let id = node.next_sibling()?;
+            node = self.tree.get(id);
+
+            match node.value {
+                Window::Client(_) => {
+                    break Some(ClientId::from(id));
+                }
+                _ => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    pub fn previous_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+        let mut node = self.tree.get(i.as_raw());
+
+        loop {
+            let id = node.previous_sibling()?;
+            node = self.tree.get(id);
+
+            match node.value {
+                Window::Client(_) => {
+                    break Some(ClientId::from(id));
+                }
+                _ => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    pub fn next_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+        let mut node = self.tree.get(i.as_raw());
+
+        loop {
+            let id = node.next_sibling()?;
+            node = self.tree.get(id);
+
+            match node.value {
+                Window::Layout(_) => {
+                    break Some(LayoutId::from(id));
+                }
+                _ => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    pub fn previous_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+        let mut node = self.tree.get(i.as_raw());
+
+        loop {
+            let id = node.previous_sibling()?;
+            node = self.tree.get(id);
+
+            match node.value {
+                Window::Layout(_) => {
+                    break Some(LayoutId::from(id));
+                }
+                _ => {
+                    continue;
+                }
+            }
+        }
     }
 }
 

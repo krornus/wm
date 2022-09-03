@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::ops::{Index, IndexMut};
 
 use crate::client::Client;
 use crate::display::{Display, Monitor, MonitorId};
-use crate::window::{ClientId, LayoutId};
+use crate::window::ClientId;
 use crate::error::Error;
 use crate::keyboard::{Binding, Keys};
 use crate::rect::Rect;
@@ -313,16 +314,6 @@ impl<T: Copy> WindowManager<T> {
     }
 
     #[inline]
-    pub fn get(&self, view: MonitorId) -> Option<&Monitor> {
-        self.display.get(view)
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self, view: MonitorId) -> Option<&mut Monitor> {
-        self.display.get_mut(view)
-    }
-
-    #[inline]
     pub fn get_monitor(&mut self) -> Option<MonitorId> {
         self.display.get_focus()
     }
@@ -339,11 +330,8 @@ impl<T: Copy> WindowManager<T> {
 
     pub fn get_focus(&mut self) -> Option<(MonitorId, ClientId)> {
         self.get_monitor()
-          .and_then(|mid| match self.get(mid) {
-              Some(mon) => {
-                  mon.focus.map(|cid| (mid, cid))
-              }
-              None => None,
+          .and_then(|mid| {
+              self[mid].focus.map(|cid| (mid, cid))
           })
     }
 
@@ -452,5 +440,22 @@ impl<T: Copy> WindowManager<T> {
     /// handle the DestroyNotify, which notifies us that a window has been destroyed
     fn destroy(&mut self, _: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
         Ok(Event::Empty)
+    }
+}
+
+
+impl<T: Copy> Index<MonitorId> for WindowManager<T> {
+    type Output = Monitor;
+
+    #[inline]
+    fn index(&self, index: MonitorId) -> &Self::Output {
+        &self.display[index]
+    }
+}
+
+impl<T: Copy> IndexMut<MonitorId> for WindowManager<T> {
+    #[inline]
+    fn index_mut(&mut self, index: MonitorId) -> &mut Self::Output {
+        &mut self.display[index]
     }
 }

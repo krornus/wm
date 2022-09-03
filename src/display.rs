@@ -209,7 +209,7 @@ impl IndexMut<LayoutId> for Monitor {
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct MonitorId {
-    index: SlabIndex,
+    inner: SlabIndex,
 }
 
 pub struct Display {
@@ -236,7 +236,7 @@ impl Display {
     fn insert(&mut self, mon: Monitor) -> MonitorId {
         let index = self.monitors.insert(mon);
 
-        let id = MonitorId { index: index };
+        let id = MonitorId { inner: index };
 
         if self.focus.is_none() {
             self.focus = Some(id);
@@ -278,12 +278,12 @@ impl Display {
                 if new.name == monitor.name {
                     if new.rect != monitor.rect {
                         monitor.rect = new.rect;
-                        conn.push(Event::MonitorResize(MonitorId { index }));
+                        conn.push(Event::MonitorResize(MonitorId { inner: index }));
                     }
 
                     /* optionally update the primary monitor to this one */
                     if primary == Some(i) {
-                        self.set_primary(conn, MonitorId { index });
+                        self.set_primary(conn, MonitorId { inner: index });
                     }
 
                     added = false;
@@ -313,29 +313,16 @@ impl Display {
     pub fn client(&mut self, client: Client) -> ClientId {
         /* TODO: support missing output */
         let focus = self.focus.expect("no output available");
-        let output = self.monitors.get_mut(&focus.index).unwrap();
+        let output = self.monitors.get_mut(&focus.inner).unwrap();
 
         output.client(client)
     }
 
-    #[inline]
-    pub fn get(&self, id: MonitorId) -> Option<&Monitor> {
-        self.monitors.get(&id.index)
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self, id: MonitorId) -> Option<&mut Monitor> {
-        self.monitors.get_mut(&id.index)
-    }
-
     pub fn set_focus<T>(&mut self, conn: &mut Connection<T>, id: MonitorId, client: ClientId) -> Result<(), Error> {
-        match self.get_mut(id) {
-            Some(mon) => {
-                mon[client].focus(conn)?;
-                mon.focus = Some(client);
-            }
-            None => {},
-        }
+        let mon = &mut self[id];
+
+        mon[client].focus(conn)?;
+        mon.focus = Some(client);
 
         Ok(())
     }
@@ -360,6 +347,25 @@ impl Display {
     }
 }
 
+impl Index<MonitorId> for Display {
+    type Output = Monitor;
+
+    #[inline]
+    fn index(&self, index: MonitorId) -> &Self::Output {
+        self.monitors.get(&index.inner)
+            .expect("invalid monitor id!")
+    }
+}
+
+impl IndexMut<MonitorId> for Display {
+    #[inline]
+    fn index_mut(&mut self, index: MonitorId) -> &mut Self::Output {
+        self.monitors.get_mut(&index.inner)
+            .expect("invalid monitor id!")
+    }
+}
+
+
 pub struct Iter<'a> {
     iter: slab::Iter<'a, Monitor>
 }
@@ -369,7 +375,7 @@ impl<'a> Iterator for Iter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(i,m)| {
-            (MonitorId { index: i }, m)
+            (MonitorId { inner: i }, m)
         })
     }
 }
@@ -383,7 +389,7 @@ impl<'a> Iterator for IterMut<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(i,m)| {
-            (MonitorId { index: i }, m)
+            (MonitorId { inner: i }, m)
         })
     }
 }

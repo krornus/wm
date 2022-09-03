@@ -163,8 +163,8 @@ impl Manager {
             let info = &self.monitors[&id];
             let selection = self.tags.select(&info.tagsets);
 
-            self.wm.get_mut(id)
-                .map(|m| m.arrange(conn, &selection));
+            let mon = &mut self.wm[id];
+            mon.arrange(conn, &selection)?;
         }
 
         Ok(())
@@ -252,7 +252,7 @@ impl Manager {
         loop {
             match self.wm.next(&mut self.conn)? {
                 wm::Event::MonitorConnect(id) => {
-                    let monitor = self.wm.get_mut(id).unwrap();
+                    let monitor = &mut self.wm[id];
                     let rect = monitor.get_rect();
 
                     let mut info = MonitorInfo::connect(rect);
@@ -284,8 +284,7 @@ impl Manager {
                     self.bindtag(keysym::b, id, lid, 4)?;
                 },
                 wm::Event::MonitorResize(id) => {
-                    let monitor = self.wm.get_mut(id).unwrap();
-
+                    let monitor = &mut self.wm[id];
                     let info = self.monitors.get_mut(&id).unwrap();
                     let rect = monitor.get_rect();
 
@@ -301,11 +300,8 @@ impl Manager {
                 wm::Event::ClientCreate(mid, cid) => {
                     let mask = self.tags.masks().clone();
 
-                    self.wm.get_mut(mid)
-                        .map(|mon| {
-                            let client = &mut mon[cid];
-                            client.set_mask(mask)
-                        });
+                    let client = &mut self.wm[mid][cid];
+                    client.set_mask(mask);
 
                     self.arrange()?;
                     self.draw(mid)?;
@@ -329,8 +325,9 @@ impl Manager {
                 }
                 wm::Event::UserEvent(Event::ClientSet(tagset, tag)) => {
                     self.wm.get_monitor()
-                        .and_then(|mid| self.wm.get_mut(mid))
-                        .and_then(|mon| {
+                        .and_then(|mid| {
+                            let mon = &mut self.wm[mid];
+
                             mon.focus.and_then(move |focus| {
                                 mon[focus].get_mask_mut(tagset)
                             })
@@ -348,8 +345,8 @@ impl Manager {
                 }
                 wm::Event::UserEvent(Event::ClientUpdate(tagset, tag)) => {
                     self.wm.get_monitor()
-                        .and_then(|focus| self.wm.get_mut(focus))
-                        .and_then(|mon| {
+                        .and_then(|mid| {
+                            let mon = &mut self.wm[mid];
                             mon.focus.and_then(move |focus| {
                                 mon[focus].get_mask_mut(tagset)
                             })
