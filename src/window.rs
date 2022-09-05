@@ -201,7 +201,7 @@ impl WindowTree {
 
     /// Remove and return a node from the tree
     pub fn remove<I: AsRawIndex>(&mut self, id: I) -> Window {
-        self.tree.prune(id.as_raw()).value
+        self.tree.prune(id.as_raw())
     }
 
     /// Show or hide an entire layout
@@ -360,14 +360,14 @@ impl WindowTree {
         Ok(focus)
     }
 
-    pub fn take(&mut self, mut other: WindowTree) {
+    pub fn graft(&mut self, mut other: WindowTree) {
         let root = other.root();
         let children: Vec<_> = other.tree.children(root.inner).collect();
 
         let parent = self.root();
 
         for child in children.into_iter().rev() {
-            self.tree.take(&mut other.tree, child, parent.inner);
+            self.tree.graft(&mut other.tree, child, parent.inner);
         }
     }
 }

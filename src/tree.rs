@@ -155,35 +155,33 @@ impl<T> Tree<T> {
         self.slab.get_mut(index).expect(&format!("index out of bounds: {}", index))
     }
 
-    /// Take a sub-tree from one tree and place it in another
-    pub fn take(&mut self, other: &mut Tree<T>, from: usize, to: usize) {
+    /// Remove a sub-tree from one tree and graft it into another
+    pub fn graft(&mut self, other: &mut Tree<T>, from: usize, to: usize) {
         /* not the fastest way to do this, but the easiest to read */
         let children: Vec<_> = other.children(from).collect();
         let node = other.slab.remove(from);
         let index = self.insert(to, node.value);
 
         for child in children.into_iter().rev() {
-            self.take(other, child, index);
+            self.graft(other, child, index);
         }
     }
 
-    /// Drop a node and its children from a tree with no further processing
-    fn drop(&mut self, index: usize) -> TreeNode<T> {
+    /// Discard a node and its children from a tree with no further processing
+    fn discard(&mut self, index: usize) -> TreeNode<T> {
         let children: Vec<_> = self.children(index).collect();
 
         let root = self.slab.remove(index);
 
         for child in children.into_iter() {
-            self.drop(child);
+            self.discard(child);
         }
 
         root
     }
 
-    /// Remove a node from the tree, returning just the node. Children are removed silently
-    pub fn prune(&mut self, index: usize) -> TreeNode<T> {
-        let children: Vec<_> = self.children(index).collect();
-
+    /// Extract a node from the tree and return its value, non-recursively
+    pub fn extract(&mut self, index: usize) -> T {
         let root = self.slab.remove(index);
 
         /* check the left sibling. if there isn't one, we are the first child in
@@ -226,11 +224,18 @@ impl<T> Tree<T> {
             },
         }
 
+        root.value
+    }
+
+    /// Extract a node from the tree and return its value, recursively discarding children
+    pub fn prune(&mut self, index: usize) -> T {
+        let children: Vec<_> = self.children(index).collect();
+
         for child in children.into_iter() {
-            self.drop(child);
+            self.discard(child);
         }
 
-        root
+        self.extract(index)
     }
 
     /// Remove a node from the tree, returning a new tree with root at node
@@ -244,7 +249,7 @@ impl<T> Tree<T> {
         let parent = tree.root.unwrap();
 
         for child in children.into_iter().rev() {
-            tree.take(self, child, parent);
+            tree.graft(self, child, parent);
         }
 
         tree
