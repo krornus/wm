@@ -72,7 +72,7 @@ impl Painter {
 
         let reply = conn.wait_for_reply(cookie)?;
 
-        Ok(Color { pixel: dbg!(reply.pixel()) })
+        Ok(Color { pixel: reply.pixel() })
     }
 
     pub fn brush<T>(&mut self, conn: &mut Connection<T>, foreground: Color, background: Color) -> Result<(), Error> {
@@ -85,8 +85,8 @@ impl Painter {
                 ],
             })?;
 
-            self.foreground = dbg!(foreground);
-            self.background = dbg!(background);
+            self.foreground = foreground;
+            self.background = background;
 
         } else if self.foreground != foreground {
             conn.send_and_check_request(&x::ChangeGc {

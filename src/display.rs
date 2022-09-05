@@ -7,7 +7,7 @@ use crate::layout::{Layout, LeftMaster};
 use crate::rect::Rect;
 use crate::slab::{self, Slab, SlabIndex};
 use crate::tag::TagSelection;
-use crate::window::{WindowTree, ClientId, LayoutId};
+use crate::window::{WindowTree, ClientId, LayoutId, AsRawIndex, Window};
 use crate::wm::{Connection, Event};
 
 use xcb::{randr, x};
@@ -138,6 +138,8 @@ impl Monitor {
 }
 
 impl Monitor {
+    /* these functions mostly mirror the WindowTree API, with a few minor tweaks */
+
     #[inline]
     pub fn arrange<'a, 'b, T>(
         &mut self,
@@ -169,6 +171,39 @@ impl Monitor {
     #[inline]
     pub fn find(&self, window: x::Window) -> Option<ClientId> {
         self.tree.find(window)
+    }
+
+    #[inline]
+    pub fn remove<I: AsRawIndex>(&mut self, id: I) -> Window {
+        self.tree.remove(id)
+    }
+
+    #[inline]
+    pub fn parent<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+        self.tree.parent(i)
+    }
+
+    #[inline]
+    pub fn next_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+        self.tree.next_client(i)
+    }
+
+
+    #[inline]
+    pub fn previous_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+        self.tree.previous_client(i)
+    }
+
+
+    #[inline]
+    pub fn next_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+        self.tree.next_layout(i)
+    }
+
+
+    #[inline]
+    pub fn previous_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+        self.tree.previous_layout(i)
     }
 }
 

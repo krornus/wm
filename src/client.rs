@@ -93,16 +93,16 @@ impl Client {
         Ok(())
     }
 
-    pub fn mask<'a, 'b>(&self, mask: &TagSelection<'a, 'b>) -> bool {
-        for (id, mask) in mask.iter() {
+    pub fn mask<'a, 'b>(&self, sel: &TagSelection<'a, 'b>) -> bool {
+        for (id, tagset) in sel.iter() {
             match self.mask.get(&id) {
                 Some(m) => {
-                    if !mask.visible(m) {
+                    if !tagset.mask().visible(m) {
                         return false;
                     }
                 }
                 None => {
-                    if !mask.visible(&TagMask::new()) {
+                    if !tagset.mask().visible(&TagMask::new()) {
                         return false;
                     }
                 }
@@ -112,8 +112,8 @@ impl Client {
         true
     }
 
-    pub fn set_mask(&mut self, mask: HashMap<TagSetId, TagMask>) {
-        self.mask = mask.clone()
+    pub fn insert_mask(&mut self, id: TagSetId, mask: TagMask) {
+        self.mask.insert(id, mask);
     }
 
     pub fn get_mask_mut(&mut self, id: TagSetId) -> Option<&mut TagMask> {

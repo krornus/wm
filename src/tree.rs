@@ -152,7 +152,7 @@ impl<T> Tree<T> {
 
     #[inline]
     pub fn get_mut(&mut self, index: usize) -> &mut TreeNode<T> {
-        self.slab.get_mut(index).expect("index out of bounds")
+        self.slab.get_mut(index).expect(&format!("index out of bounds: {}", index))
     }
 
     /// Take a sub-tree from one tree and place it in another
@@ -167,14 +167,77 @@ impl<T> Tree<T> {
         }
     }
 
-    pub fn drop(&mut self, index: usize) -> TreeNode<T> {
-        self.slab.remove(index)
-    }
-
-    pub fn remove(&mut self, index: usize) -> Option<Tree<T>> {
+    /// Drop a node and its children from a tree with no further processing
+    fn drop(&mut self, index: usize) -> TreeNode<T> {
         let children: Vec<_> = self.children(index).collect();
 
-        let root = self.slab.try_remove(index)?;
+        let root = self.slab.remove(index);
+
+        for child in children.into_iter() {
+            self.drop(child);
+        }
+
+        root
+    }
+
+    /// Remove a node from the tree, returning just the node. Children are removed silently
+    pub fn prune(&mut self, index: usize) -> TreeNode<T> {
+        let children: Vec<_> = self.children(index).collect();
+
+        let root = self.slab.remove(index);
+
+        /* check the left sibling. if there isn't one, we are the first child in
+         * parent. otherwise, update the right sibling. */
+        match root.left {
+            Some(i) => {
+                /* we have a sibling to the left. give it our right value */
+                self.get_mut(i).right = root.right;
+            },
+            None => {
+                /* we are the first child for our parent.
+                 * update parent.first to have our right value */
+                match root.parent {
+                    Some(j) => {
+                        self.get_mut(j).first = root.right;
+                    },
+                    None => {
+                    }
+                }
+            },
+        }
+
+        /* check the right sibling. if there isn't one, we are the last child in
+         * parent. otherwise, update the left sibling. */
+        match root.right {
+            Some(i) => {
+                /* we have a sibling to the right. give it our left value */
+                self.get_mut(i).left = root.left;
+            },
+            None => {
+                /* we are the last child for our parent.
+                 * update parent.last to have our left value */
+                match root.parent {
+                    Some(j) => {
+                        self.get_mut(j).last = root.left;
+                    },
+                    None => {
+                    }
+                }
+            },
+        }
+
+        for child in children.into_iter() {
+            self.drop(child);
+        }
+
+        root
+    }
+
+    /// Remove a node from the tree, returning a new tree with root at node
+    pub fn remove(&mut self, index: usize) -> Tree<T> {
+        let children: Vec<_> = self.children(index).collect();
+
+        let root = self.slab.remove(index);
         let mut tree = Tree::new();
         tree.swap_root(root.value);
 
@@ -184,7 +247,7 @@ impl<T> Tree<T> {
             tree.take(self, child, parent);
         }
 
-        Some(tree)
+        tree
     }
 }
 

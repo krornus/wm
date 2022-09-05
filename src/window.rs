@@ -26,14 +26,14 @@ pub enum Window {
 
 /// A ClientId is the index of a Client in a WindowTree
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct ClientId {
     inner: usize
 }
 
 /// A LayoutId is the index of a Layout in a WindowTree
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutId {
     inner: usize
 }
@@ -199,14 +199,9 @@ impl WindowTree {
         })
     }
 
-    /// Remove and return a client from the tree
-    pub fn remove(&mut self, id: ClientId) -> Client {
-        let node = self.tree.drop(id.inner);
-
-        match node.value {
-            Window::Client(c) => c,
-            Window::Layout(_) => panic!("attempt to remove layout"),
-        }
+    /// Remove and return a node from the tree
+    pub fn remove<I: AsRawIndex>(&mut self, id: I) -> Window {
+        self.tree.prune(id.as_raw()).value
     }
 
     /// Show or hide an entire layout

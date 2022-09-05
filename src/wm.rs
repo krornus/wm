@@ -5,7 +5,7 @@ use std::ops::{Index, IndexMut};
 
 use crate::client::Client;
 use crate::display::{Display, Monitor, MonitorId};
-use crate::window::ClientId;
+use crate::window::{Window, ClientId};
 use crate::error::Error;
 use crate::keyboard::{Binding, Keys};
 use crate::rect::Rect;
@@ -25,8 +25,26 @@ pub enum Event<T> {
     MonitorDisconnect(MonitorId),
     MonitorPrimary(MonitorId),
     ClientCreate(MonitorId, ClientId),
-    ClientDestroy(ClientId),
+    ClientDestroy(MonitorId, Client),
+    ClientEnter(MonitorId, ClientId),
     UserEvent(T),
+}
+
+impl<T> std::fmt::Debug for Event<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Event::Empty => write!(f, "Event::Empty"),
+            Event::Interrupt => write!(f, "Event::Interrupt"),
+            Event::MonitorConnect(_) => write!(f, "Event::MonitorConnect"),
+            Event::MonitorResize(_) => write!(f, "Event::MonitorResize"),
+            Event::MonitorDisconnect(_) => write!(f, "Event::MonitorDisconnect"),
+            Event::MonitorPrimary(_) => write!(f, "Event::MonitorPrimary"),
+            Event::ClientCreate(_, _) => write!(f, "Event::ClientCreate"),
+            Event::ClientDestroy(_, _) => write!(f, "Event::ClientDestroy"),
+            Event::ClientEnter(_, _) => write!(f, "Event::ClientEnter"),
+            Event::UserEvent(_) => write!(f, "Event::UserEvent"),
+        }
+    }
 }
 
 pub struct Connection<T> {
@@ -261,7 +279,6 @@ impl<T: Copy> WindowManager<T> {
             xcb::Event::X(xcb::x::Event::ConfigureRequest(ref e)) => self.configure(conn, e),
             xcb::Event::X(xcb::x::Event::MapRequest(ref e)) => self.map(conn, e),
             xcb::Event::X(xcb::x::Event::EnterNotify(ref e)) => self.enter(conn, e),
-            xcb::Event::X(xcb::x::Event::UnmapNotify(ref e)) => self.unmap(e),
             xcb::Event::X(xcb::x::Event::DestroyNotify(ref e)) => self.destroy(e),
             xcb::Event::RandR(xcb::randr::Event::ScreenChangeNotify(_)) => {
                 self.display.update(conn)?;
@@ -335,6 +352,22 @@ impl<T: Copy> WindowManager<T> {
           })
     }
 
+    pub fn next_client(&mut self) -> Option<(MonitorId, ClientId)> {
+        self.get_focus()
+            .and_then(|(mid, cid)| {
+                self[mid].next_client(cid)
+                    .map(|next| (mid, next))
+            })
+    }
+
+    pub fn previous_client(&mut self) -> Option<(MonitorId, ClientId)> {
+        self.get_focus()
+            .and_then(|(mid, cid)| {
+                self[mid].previous_client(cid)
+                    .map(|next| (mid, next))
+            })
+    }
+
     pub fn get_painter_mut(&mut self) -> &mut Painter {
         &mut self.painter
     }
@@ -371,9 +404,10 @@ impl<T: Copy> WindowManager<T> {
 
         if let Some((mid, cid)) = focus {
             self.display.set_focus(conn, mid, cid)?;
+            Ok(Event::ClientEnter(mid, cid))
+        } else {
+            Ok(Event::Empty)
         }
-
-        Ok(Event::Empty)
     }
 
     /// handle a ConfigureRequestEvent, which is a request to configure a window's properties
@@ -420,10 +454,8 @@ impl<T: Copy> WindowManager<T> {
 
     /// handle the MapRequestEvent, which is a request for us to show a window on screen
     fn map(&mut self, conn: &mut Connection<T>, e: &x::MapRequestEvent) -> Result<Event<T>, Error> {
-        let client = self
-            .display
-            .iter()
-            .find_map(|(_, view)| view.find(e.window()));
+        let client = self.display.iter()
+            .find_map(|(_, mon)| mon.find(e.window()));
 
         if client.is_none() {
             self.manage(conn, e.window())
@@ -432,14 +464,27 @@ impl<T: Copy> WindowManager<T> {
         }
     }
 
-    /// handle the UnmapNotifyEvent, which notifies us that a window has been unmapped (hidden)
-    fn unmap(&mut self, _: &x::UnmapNotifyEvent) -> Result<Event<T>, Error> {
-        Ok(Event::Empty)
-    }
-
     /// handle the DestroyNotify, which notifies us that a window has been destroyed
-    fn destroy(&mut self, _: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
-        Ok(Event::Empty)
+    fn destroy(&mut self, e: &x::DestroyNotifyEvent) -> Result<Event<T>, Error> {
+        let ids = self.display.iter()
+            .find_map(|(mid, mon)| {
+                mon.find(e.window()).map(|cid| {
+                    (mid, cid)
+                })
+            });
+
+        match ids {
+            Some((mid, cid)) => {
+                println!("remove: {:?}, {:?}", mid, cid);
+                match self[mid].remove(cid) {
+                    Window::Client(c) => Ok(Event::ClientDestroy(mid, c)),
+                    _ => panic!("Invalid client ID"),
+                }
+            },
+            None => {
+                Ok(Event::Empty)
+            }
+        }
     }
 }
 
