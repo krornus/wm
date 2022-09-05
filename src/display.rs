@@ -5,7 +5,6 @@ use crate::client::Client;
 use crate::error::Error;
 use crate::layout::{Layout, LeftMaster};
 use crate::rect::Rect;
-use crate::slab::{self, Slab, SlabIndex};
 use crate::tag::TagSelection;
 use crate::window::{WindowTree, ClientId, LayoutId, AsRawIndex, Window};
 use crate::wm::{Connection, Event};
@@ -244,12 +243,12 @@ impl IndexMut<LayoutId> for Monitor {
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct MonitorId {
-    inner: SlabIndex,
+    inner: usize,
 }
 
 pub struct Display {
     root: x::Window,
-    monitors: Slab<Monitor>,
+    monitors: slab::Slab<Monitor>,
     primary: Option<MonitorId>,
     focus: Option<MonitorId>,
 }
@@ -258,7 +257,7 @@ impl Display {
     pub fn new<T>(conn: &mut Connection<T>, root: x::Window) -> Result<Self, Error> {
         let mut display = Display {
             root: root,
-            monitors: Slab::new(),
+            monitors: slab::Slab::new(),
             primary: None,
             focus: None,
         };
@@ -348,7 +347,7 @@ impl Display {
     pub fn client(&mut self, client: Client) -> ClientId {
         /* TODO: support missing output */
         let focus = self.focus.expect("no output available");
-        let output = self.monitors.get_mut(&focus.inner).unwrap();
+        let output = self.monitors.get_mut(focus.inner).unwrap();
 
         output.client(client)
     }
@@ -387,7 +386,7 @@ impl Index<MonitorId> for Display {
 
     #[inline]
     fn index(&self, index: MonitorId) -> &Self::Output {
-        self.monitors.get(&index.inner)
+        self.monitors.get(index.inner)
             .expect("invalid monitor id!")
     }
 }
@@ -395,7 +394,7 @@ impl Index<MonitorId> for Display {
 impl IndexMut<MonitorId> for Display {
     #[inline]
     fn index_mut(&mut self, index: MonitorId) -> &mut Self::Output {
-        self.monitors.get_mut(&index.inner)
+        self.monitors.get_mut(index.inner)
             .expect("invalid monitor id!")
     }
 }

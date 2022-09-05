@@ -9,7 +9,6 @@ mod keysym;
 mod layout;
 mod painter;
 mod rect;
-mod slab;
 mod tag;
 mod tree;
 mod window;
