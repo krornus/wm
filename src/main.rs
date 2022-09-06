@@ -222,23 +222,23 @@ impl Manager {
                 if occ && enabled {
                     painter.brush(
                         &mut self.conn,
+                        self.colorscheme.focus,
+                        self.colorscheme.focus)?;
+                } else if occ && !enabled {
+                    painter.brush(
+                        &mut self.conn,
                         self.colorscheme.occupied,
                         self.colorscheme.occupied)?;
-                } else if occ && !enabled {
+                } else if !occ && enabled {
                     painter.brush(
                         &mut self.conn,
                         self.colorscheme.unoccupied,
                         self.colorscheme.unoccupied)?;
-                } else if !occ && enabled {
+                } else {
                     painter.brush(
                         &mut self.conn,
                         self.colorscheme.unfocus,
                         self.colorscheme.unfocus)?;
-                } else {
-                    painter.brush(
-                        &mut self.conn,
-                        self.colorscheme.focus,
-                        self.colorscheme.focus)?;
                 }
 
                 painter.rect(&mut self.conn, &square)?;
