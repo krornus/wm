@@ -1,13 +1,28 @@
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, BitOr};
+
+use crate::slab::AsIndex;
 
 use slab::{self, Slab};
-
 use bitvec::prelude::*;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct TagSetId {
     inner: usize,
+}
+
+impl AsIndex for TagSetId {
+    fn as_index(&self) -> usize {
+        self.inner
+    }
+}
+
+impl From<usize> for TagSetId {
+    fn from(id: usize) -> TagSetId {
+        TagSetId {
+            inner: id
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -156,6 +171,15 @@ impl From<BitVec> for TagMask {
         TagMask {
             mask: bv,
         }
+    }
+}
+
+impl BitOr<TagMask> for TagMask {
+    type Output = Self;
+
+    #[inline]
+    fn bitor(self, rhs: TagMask) -> Self::Output {
+        TagMask { mask: self.mask | rhs.mask }
     }
 }
 

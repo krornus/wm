@@ -13,10 +13,12 @@ mod tag;
 mod tree;
 mod window;
 mod wm;
+mod slab;
 
 use crate::display::MonitorId;
 use crate::tag::{Tag, TagSet, TagSetId, Tags};
 use crate::rect::{Rect, Cut};
+use crate::slab::{SlabMap, AsIndex};
 
 use xcb::x;
 
@@ -36,6 +38,8 @@ struct Colorscheme {
     focus: painter::Color,
     unfocus: painter::Color,
     text: painter::Color,
+    occupied: painter::Color,
+    unoccupied: painter::Color,
 }
 
 impl Colorscheme {
@@ -45,6 +49,8 @@ impl Colorscheme {
         Ok(Colorscheme {
             focus: painter.color(conn, 55, 146, 237)?,
             unfocus: painter.color(conn, 22, 22, 22)?,
+            occupied: painter.color(conn, 55, 237, 237)?,
+            unoccupied: painter.color(conn, 237, 146, 237)?,
             text: painter.white(),
         })
     }
@@ -173,8 +179,6 @@ impl Manager {
         let info = &self.monitors[&id];
         let bar = info.bar;
 
-        let painter = self.wm.get_painter_mut();
-
         let mut max = 0;
         for (_, tagset) in self.tags.iter() {
             if tagset.len() > max {
@@ -189,27 +193,66 @@ impl Manager {
         let height = bar.h / count as u16;
 
         let mut square = Rect::new(bar.x, bar.y, width, height);
+        let mut occsq  = Rect::new(bar.x, bar.y, width / 2, height / 2);
 
-        for (_, tagset) in self.tags.iter() {
-            for (_, enabled) in tagset.tags() {
-                if enabled {
+        let mut occupied: SlabMap<tag::TagMask> = SlabMap::new();
+
+        for (_, client) in self.wm[id].clients() {
+            let mask = client.mask();
+
+            for (id, mask) in mask.iter() {
+                let mask = match occupied.get(id) {
+                    Some(m) => m.clone() | mask.clone(),
+                    None => mask.clone(),
+                };
+
+                occupied.insert(id, mask);
+            }
+        }
+
+        let painter = self.wm.get_painter_mut();
+
+        for (id, tagset) in self.tags.iter() {
+            let mask = &occupied.get(id.as_index());
+
+            for (i, (_, enabled)) in tagset.tags().enumerate() {
+                let occ = mask.map(|m| m.get(i))
+                    .unwrap_or(false);
+
+                if occ && enabled {
                     painter.brush(
                         &mut self.conn,
-                        self.colorscheme.focus,
+                        self.colorscheme.occupied,
+                        self.colorscheme.occupied)?;
+                } else if occ && !enabled {
+                    painter.brush(
+                        &mut self.conn,
+                        self.colorscheme.unoccupied,
+                        self.colorscheme.unoccupied)?;
+                } else if !occ && enabled {
+                    painter.brush(
+                        &mut self.conn,
+                        self.colorscheme.unfocus,
                         self.colorscheme.unfocus)?;
                 } else {
                     painter.brush(
                         &mut self.conn,
-                        self.colorscheme.unfocus,
+                        self.colorscheme.focus,
                         self.colorscheme.focus)?;
                 }
 
                 painter.rect(&mut self.conn, &square)?;
+
                 square.x += square.w as i16;
+                occsq.x  += square.w as i16;
             }
 
             square.x = bar.x;
             square.y += height as i16;
+
+            occsq.x = bar.x;
+            occsq.y += height as i16;
+
         }
 
         Ok(())
@@ -333,7 +376,8 @@ impl Manager {
                             let mon = &mut self.wm[mid];
 
                             mon.focus.and_then(move |focus| {
-                                mon[focus].get_mask_mut(tagset)
+                                let map = mon[focus].mask_mut();
+                                map.get_mut(tagset.as_index())
                             })
                         })
                         .map(|t| {
@@ -352,7 +396,8 @@ impl Manager {
                         .and_then(|mid| {
                             let mon = &mut self.wm[mid];
                             mon.focus.and_then(move |focus| {
-                                mon[focus].get_mask_mut(tagset)
+                                let map = mon[focus].mask_mut();
+                                map.get_mut(tagset.as_index())
                             })
                         })
                         .map(|mask| mask.set(tag));

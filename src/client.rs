@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use crate::rect::Rect;
+use crate::slab::{SlabMap, AsIndex};
 use crate::tag::{TagMask, TagSelection, TagSetId};
 use crate::wm::Connection;
 use crate::error::Error;
@@ -11,7 +10,7 @@ pub struct Client {
     window: x::Window,
     visible: bool,
     rect: Rect,
-    mask: HashMap<TagSetId, TagMask>,
+    mask: SlabMap<TagMask>,
 }
 
 impl Client {
@@ -37,7 +36,7 @@ impl Client {
             window: window,
             visible: false,
             rect: rect,
-            mask: HashMap::new(),
+            mask: SlabMap::new(),
         }
     }
 
@@ -93,9 +92,9 @@ impl Client {
         Ok(())
     }
 
-    pub fn mask<'a, 'b>(&self, sel: &TagSelection<'a, 'b>) -> bool {
+    pub fn masked<'a, 'b>(&self, sel: &TagSelection<'a, 'b>) -> bool {
         for (id, tagset) in sel.iter() {
-            match self.mask.get(&id) {
+            match self.mask.get(id.as_index()) {
                 Some(m) => {
                     if !tagset.mask().visible(m) {
                         return false;
@@ -113,10 +112,14 @@ impl Client {
     }
 
     pub fn insert_mask(&mut self, id: TagSetId, mask: TagMask) {
-        self.mask.insert(id, mask);
+        self.mask.insert(id.as_index(), mask);
     }
 
-    pub fn get_mask_mut(&mut self, id: TagSetId) -> Option<&mut TagMask> {
-        self.mask.get_mut(&id)
+    pub fn mask(&self) -> &SlabMap<TagMask> {
+        &self.mask
+    }
+
+    pub fn mask_mut(&mut self) -> &mut SlabMap<TagMask> {
+        &mut self.mask
     }
 }

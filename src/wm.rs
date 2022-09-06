@@ -475,7 +475,6 @@ impl<T: Copy> WindowManager<T> {
 
         match ids {
             Some((mid, cid)) => {
-                println!("remove: {:?}, {:?}", mid, cid);
                 match self[mid].remove(cid) {
                     Window::Client(c) => Ok(Event::ClientDestroy(mid, c)),
                     _ => panic!("Invalid client ID"),

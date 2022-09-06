@@ -1,5 +1,6 @@
 use std::ops::{Index, IndexMut};
 
+use crate::slab::AsIndex;
 use crate::client::Client;
 use crate::error::Error;
 use crate::layout::{Cell, Layout};
@@ -36,6 +37,37 @@ pub struct ClientId {
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutId {
     inner: usize
+}
+
+
+impl AsIndex for ClientId {
+    fn as_index(&self) -> usize {
+        self.inner
+    }
+}
+
+impl AsIndex for LayoutId {
+    fn as_index(&self) -> usize {
+        self.inner
+    }
+}
+
+impl From<usize> for ClientId {
+    #[inline]
+    fn from(i: usize) -> Self {
+        ClientId {
+            inner: i
+        }
+    }
+}
+
+impl From<usize> for LayoutId {
+    #[inline]
+    fn from(i: usize) -> Self {
+        LayoutId {
+            inner: i
+        }
+    }
 }
 
 /// MaskTree is a secondary tree that is recursively generated from a WindowTree
@@ -92,7 +124,7 @@ impl MaskTree {
         match node.value {
             /* Clients are guarenteed to be leafs */
             Window::Client(ref mut client) => {
-                if client.mask(mask) {
+                if client.masked(mask) {
                     Ok(Some(self.tree.orphan(from)))
                 } else {
                     /* this is our only chance to hide this window, as it is
@@ -185,6 +217,12 @@ impl WindowTree {
         }
     }
 
+    pub fn clients<'a>(&'a self) -> Clients<'a> {
+        Clients {
+            iter: self.tree.iter(),
+        }
+    }
+
     /// Search for a client in the tree based on its window
     pub fn find(&self, window: x::Window) -> Option<ClientId> {
         self.tree.iter().find_map(|(id, node)| match node.value {
@@ -200,8 +238,8 @@ impl WindowTree {
     }
 
     /// Remove and return a node from the tree
-    pub fn remove<I: AsRawIndex>(&mut self, id: I) -> Window {
-        self.tree.prune(id.as_raw())
+    pub fn remove<I: AsIndex>(&mut self, id: I) -> Window {
+        self.tree.prune(id.as_index())
     }
 
     /// Show or hide an entire layout
@@ -373,31 +411,14 @@ impl WindowTree {
 }
 
 
-pub trait AsRawIndex {
-    fn as_raw(&self) -> usize;
-}
-
-impl AsRawIndex for ClientId {
-    fn as_raw(&self) -> usize {
-        self.inner
-    }
-}
-
-impl AsRawIndex for LayoutId {
-    fn as_raw(&self) -> usize {
-        self.inner
-    }
-}
-
-
 impl WindowTree {
-    pub fn parent<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
-        self.tree.get(i.as_raw()).parent()
+    pub fn parent<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
+        self.tree.get(i.as_index()).parent()
             .map(|x| LayoutId::from(x))
     }
 
-    pub fn next_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
-        let mut node = self.tree.get(i.as_raw());
+    pub fn next_client<I: AsIndex>(&self, i: I) -> Option<ClientId> {
+        let mut node = self.tree.get(i.as_index());
 
         loop {
             let id = node.next_sibling()?;
@@ -414,8 +435,8 @@ impl WindowTree {
         }
     }
 
-    pub fn previous_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
-        let mut node = self.tree.get(i.as_raw());
+    pub fn previous_client<I: AsIndex>(&self, i: I) -> Option<ClientId> {
+        let mut node = self.tree.get(i.as_index());
 
         loop {
             let id = node.previous_sibling()?;
@@ -432,8 +453,8 @@ impl WindowTree {
         }
     }
 
-    pub fn next_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
-        let mut node = self.tree.get(i.as_raw());
+    pub fn next_layout<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
+        let mut node = self.tree.get(i.as_index());
 
         loop {
             let id = node.next_sibling()?;
@@ -450,8 +471,8 @@ impl WindowTree {
         }
     }
 
-    pub fn previous_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
-        let mut node = self.tree.get(i.as_raw());
+    pub fn previous_layout<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
+        let mut node = self.tree.get(i.as_index());
 
         loop {
             let id = node.previous_sibling()?;
@@ -470,20 +491,23 @@ impl WindowTree {
 }
 
 
-impl From<usize> for ClientId {
-    #[inline]
-    fn from(i: usize) -> Self {
-        ClientId {
-            inner: i
-        }
-    }
+pub struct Clients<'a> {
+    iter: slab::Iter<'a, tree::TreeNode<Window>>
 }
 
-impl From<usize> for LayoutId {
-    #[inline]
-    fn from(i: usize) -> Self {
-        LayoutId {
-            inner: i
+impl<'a> Iterator for Clients<'a> {
+    type Item = (ClientId, &'a Client);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (index, item) = self.iter.next()?;
+
+            match item.value {
+                Window::Client(ref client) => {
+                    break Some((ClientId::from(index), client));
+                },
+                _ => {},
+            }
         }
     }
 }

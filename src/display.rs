@@ -1,15 +1,28 @@
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 
+use crate::slab::AsIndex;
 use crate::client::Client;
 use crate::error::Error;
 use crate::layout::{Layout, LeftMaster};
 use crate::rect::Rect;
 use crate::tag::TagSelection;
-use crate::window::{WindowTree, ClientId, LayoutId, AsRawIndex, Window};
+use crate::window::{WindowTree, ClientId, LayoutId, Window, Clients};
 use crate::wm::{Connection, Event};
 
 use xcb::{randr, x};
+
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct MonitorId {
+    inner: usize,
+}
+
+impl AsIndex for MonitorId {
+    fn as_index(&self) -> usize {
+        self.inner
+    }
+}
 
 /// Get a vector of all monitors with active outputs
 fn monitors<T>(
@@ -163,6 +176,11 @@ impl Monitor {
     }
 
     #[inline]
+    pub fn clients<'a>(&'a mut self) -> Clients<'a> {
+        self.tree.clients()
+    }
+
+    #[inline]
     pub fn layout(&mut self, layout: impl Layout + 'static) -> LayoutId {
         self.tree.layout(self.focused_layout(), layout)
     }
@@ -173,35 +191,35 @@ impl Monitor {
     }
 
     #[inline]
-    pub fn remove<I: AsRawIndex>(&mut self, id: I) -> Window {
+    pub fn remove<I: AsIndex>(&mut self, id: I) -> Window {
         self.tree.remove(id)
     }
 
     #[inline]
-    pub fn parent<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+    pub fn parent<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
         self.tree.parent(i)
     }
 
     #[inline]
-    pub fn next_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+    pub fn next_client<I: AsIndex>(&self, i: I) -> Option<ClientId> {
         self.tree.next_client(i)
     }
 
 
     #[inline]
-    pub fn previous_client<I: AsRawIndex>(&self, i: I) -> Option<ClientId> {
+    pub fn previous_client<I: AsIndex>(&self, i: I) -> Option<ClientId> {
         self.tree.previous_client(i)
     }
 
 
     #[inline]
-    pub fn next_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+    pub fn next_layout<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
         self.tree.next_layout(i)
     }
 
 
     #[inline]
-    pub fn previous_layout<I: AsRawIndex>(&self, i: I) -> Option<LayoutId> {
+    pub fn previous_layout<I: AsIndex>(&self, i: I) -> Option<LayoutId> {
         self.tree.previous_layout(i)
     }
 }
@@ -238,12 +256,6 @@ impl IndexMut<LayoutId> for Monitor {
     fn index_mut(&mut self, index: LayoutId) -> &mut Self::Output {
         &mut self.tree[index]
     }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct MonitorId {
-    inner: usize,
 }
 
 pub struct Display {
