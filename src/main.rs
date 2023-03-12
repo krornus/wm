@@ -25,6 +25,7 @@ use xcb::x;
 #[derive(Copy, Clone)]
 enum Event {
     Exit,
+    Kill,
     FocusNext,
     FocusPrevious,
     MonitorSet(MonitorId, TagSetId, Tag),
@@ -264,7 +265,15 @@ impl Manager {
             mask: keyboard::Modifier::MOD4,
             keysym: keysym::Return,
             press: keyboard::Press::Press,
-            value: Event::Spawn("xterm"),
+            value: Event::Spawn("st"),
+        })?;
+
+        self.wm.bind(&mut self.conn, &keyboard::Binding {
+            monitor: None,
+            mask: keyboard::Modifier::MOD4,
+            keysym: keysym::i,
+            press: keyboard::Press::Press,
+            value: Event::Spawn("chromium"),
         })?;
 
         self.wm.bind(&mut self.conn, &keyboard::Binding {
@@ -272,7 +281,7 @@ impl Manager {
             mask: keyboard::Modifier::MOD4,
             keysym: keysym::q,
             press: keyboard::Press::Press,
-            value: Event::Exit,
+            value: Event::Kill,
         })?;
 
 

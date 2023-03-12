@@ -311,7 +311,7 @@ impl<T: Copy> WindowManager<T> {
 
                 /* swap to const pointers. into_raw() can leak here
                  * because we will execvp() or unreachable!() */
-                let cs: Vec<_> = args
+                let mut cs: Vec<_> = args
                     .into_iter()
                     .map(|x| {
                         std::ffi::CString::new(x)
@@ -319,6 +319,9 @@ impl<T: Copy> WindowManager<T> {
                             .into_raw()
                     })
                     .collect();
+
+                /* null ptr terminate the list */
+                cs.push(std::ptr::null_mut());
 
                 unsafe {
                     libc::execvp(cs[0], (&cs[..]).as_ptr() as *const *const i8);
