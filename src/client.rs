@@ -1,46 +1,45 @@
 use crate::rect::Rect;
 use crate::slab::{SlabMap, AsIndex};
-use crate::tag::{TagMask, TagSelection, TagSetId};
-use crate::wm::Connection;
+use crate::tag::{TagSetMask, TagSelection, TagSetId};
+use crate::manager::Connection;
 use crate::error::Error;
 
 use xcb::x;
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct ClientId {
+    id: usize,
+}
+
+#[derive(Debug)]
+pub enum Mode {
+    Layout,
+    Transient,
+    Floating,
+    Fullscreen,
+}
+
 pub struct Client {
-    window: x::Window,
+    size: Rect,
+    mode: Mode,
     visible: bool,
-    rect: Rect,
-    mask: SlabMap<TagMask>,
+    window: x::Window,
+    mask: SlabMap<TagSetMask>,
 }
 
 impl Client {
-    #[inline]
-    pub fn window(&self) -> x::Window {
-        self.window
-    }
-
-    #[inline]
-    pub fn visible(&self) -> bool {
-        self.visible
-    }
-
-    #[inline]
-    pub fn rect(&self) -> &Rect {
-        &self.rect
-    }
-}
-
-impl Client {
-    pub fn new(window: x::Window, rect: Rect) -> Self {
+    pub fn new(window: x::Window, size: Rect, mode: Mode) -> Self {
         Client {
-            window: window,
+            size: size,
+            mode: mode,
             visible: false,
-            rect: rect,
+            window: window,
             mask: SlabMap::new(),
         }
     }
 
-    pub fn show<T>(&mut self, conn: &mut Connection<T>, visible: bool) -> Result<(), Error> {
+    pub fn show(&mut self, conn: &mut Connection, visible: bool) -> Result<(), Error> {
         if self.visible != visible {
             self.visible = visible;
 
@@ -60,7 +59,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn focus<T>(&mut self, conn: &mut Connection<T>) -> Result<(), Error> {
+    pub fn focus(&mut self, conn: &mut Connection) -> Result<(), Error> {
         let cookie = conn.send_request_checked(&x::SetInputFocus {
             revert_to: x::InputFocus::PointerRoot,
             focus: self.window,
@@ -72,17 +71,17 @@ impl Client {
         Ok(())
     }
 
-    pub fn resize<T>(&mut self, conn: &mut Connection<T>, rect: &Rect) -> Result<(), Error> {
-        if &self.rect != rect {
-            self.rect = *rect;
+    pub fn resize(&mut self, conn: &mut Connection, size: &Rect) -> Result<(), Error> {
+        if &self.size != size {
+            self.size = *size;
 
             let cookie = conn.send_request_checked(&x::ConfigureWindow {
                 window: self.window,
                 value_list: &[
-                    x::ConfigWindow::X(self.rect.x as i32),
-                    x::ConfigWindow::Y(self.rect.y as i32),
-                    x::ConfigWindow::Width(self.rect.w as u32),
-                    x::ConfigWindow::Height(self.rect.h as u32),
+                    x::ConfigWindow::X(self.size.x as i32),
+                    x::ConfigWindow::Y(self.size.y as i32),
+                    x::ConfigWindow::Width(self.size.w as u32),
+                    x::ConfigWindow::Height(self.size.h as u32),
                 ],
             });
 
@@ -101,7 +100,7 @@ impl Client {
                     }
                 }
                 None => {
-                    if !tagset.mask().visible(&TagMask::new()) {
+                    if !tagset.mask().visible(&TagSetMask::new()) {
                         return false;
                     }
                 }
@@ -111,15 +110,15 @@ impl Client {
         true
     }
 
-    pub fn insert_mask(&mut self, id: TagSetId, mask: TagMask) {
+    pub fn insert_mask(&mut self, id: TagSetId, mask: TagSetMask) {
         self.mask.insert(id.as_index(), mask);
     }
 
-    pub fn mask(&self) -> &SlabMap<TagMask> {
+    pub fn mask(&self) -> &SlabMap<TagSetMask> {
         &self.mask
     }
 
-    pub fn mask_mut(&mut self) -> &mut SlabMap<TagMask> {
+    pub fn mask_mut(&mut self) -> &mut SlabMap<TagSetMask> {
         &mut self.mask
     }
 }

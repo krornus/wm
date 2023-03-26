@@ -1,5 +1,11 @@
 use crate::rect::{Cut, Rect, Split};
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct LayoutId {
+    id: usize,
+}
+
 #[derive(Debug)]
 pub enum Cell {
     Hide,

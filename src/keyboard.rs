@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
-use crate::display::MonitorId;
-use crate::error::Error;
-use crate::keysym;
-use crate::wm::Connection;
-
-use bitflags::bitflags;
 use xcb::x::{self, Keycode, Keysym};
+use bitflags::bitflags;
+
+use crate::keysym;
+use crate::error::Error;
+use crate::manager::Connection;
 
 bitflags! {
-    pub struct Modifier: u32 {
+    pub struct KeyModifier: u32 {
         const SHIFT = 0x00000001;
         const LOCK = 0x00000002;
         const CONTROL = 0x00000004;
@@ -63,7 +62,7 @@ impl<'a> Iterator for KeycodeIterator<'a> {
 }
 
 impl KeyMap {
-    pub fn new<T>(conn: &mut Connection<T>) -> Result<Self, Error> {
+    pub fn new(conn: &mut Connection) -> Result<Self, Error> {
         let setup = conn.get_setup();
         let min = setup.min_keycode();
         let max = setup.max_keycode();
@@ -98,7 +97,7 @@ impl KeyMap {
         }
     }
 
-    pub fn mask(&mut self, keysym: Keysym) -> Result<Modifier, Error> {
+    pub fn mask(&mut self, keysym: Keysym) -> Result<KeyModifier, Error> {
         /* taken from i3 */
         let modmap = self.modmap.keycodes();
         let keycodes_per_modifier = modmap.len() / 8;
@@ -109,123 +108,63 @@ impl KeyMap {
 
                 for keycode in self.keycodes(keysym) {
                     if keycode == modcode {
-                        return unsafe { Ok(Modifier::from_bits_unchecked(1 << modifier)) };
+                        return unsafe { Ok(KeyModifier::from_bits_unchecked(1 << modifier)) };
                     }
                 }
             }
         }
 
-        Ok(Modifier::empty())
+        Ok(KeyModifier::empty())
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum Press {
+#[derive(Debug, Clone, Copy)]
+pub enum KeyPress {
     Press,
     Release,
     Both,
 }
 
-pub struct Binding<T: Copy> {
-    pub monitor: Option<MonitorId>,
-    pub mask: Modifier,
-    pub keysym: Keysym,
-    pub press: Press,
-    pub value: T,
-}
-
 #[derive(Clone)]
-struct BindValue<T: Copy> {
-    monitor: Option<MonitorId>,
-    value: T,
+pub struct Bind {
+    pub root: x::Window,
+    pub keysym: Keysym,
+    pub mask: KeyModifier,
+    pub press: KeyPress,
 }
 
-impl<T: Copy> From<&Binding<T>> for BindValue<T> {
-    fn from(binding: &Binding<T>) -> Self {
-        BindValue {
-            monitor: binding.monitor,
-            value: binding.value,
-        }
-    }
-}
-
-struct BindingSet<T: Copy> {
-    local: Vec<BindValue<T>>,
-    global: Option<BindValue<T>>,
-}
-
-impl<T: Copy> BindingSet<T> {
-    fn new() -> Self {
-        Self {
-            local: vec![],
-            global: None,
-        }
-    }
-
-    fn bind(&mut self, binding: &Binding<T>) {
-        let value = BindValue::from(binding);
-
-        if binding.monitor.is_none() {
-            self.global = Some(value);
-        } else {
-            let at = self.local.iter().position(|x| x.monitor == binding.monitor);
-
-            match at {
-                Some(i) => {
-                    self.local[i] = value;
-                }
-                None => {
-                    self.local.push(value);
-                }
-            }
-        }
-    }
-
-    fn get(&self, monitor: Option<MonitorId>) -> Option<T> {
-        let at = monitor.and_then(|id| self.local.iter().position(|x| x.monitor == Some(id)));
-
-        match at {
-            Some(i) => Some(self.local[i].value),
-            None => self.global.as_ref().map(|x| x.value),
-        }
-    }
-}
-
-pub struct Keys<T: Copy> {
-    root: x::Window,
+pub struct Bindings {
     keymap: KeyMap,
-    num_lock: Modifier,
-    caps_lock: Modifier,
-    scroll_lock: Modifier,
-    bindings: HashMap<(Modifier, Keycode, bool), BindingSet<T>>,
+    num_lock: KeyModifier,
+    caps_lock: KeyModifier,
+    scroll_lock: KeyModifier,
+    map: HashMap<(x::Window, KeyModifier, Keycode, bool), Bind>,
 }
 
-impl<T: Copy> Keys<T> {
-    pub fn new(conn: &mut Connection<T>, root: x::Window) -> Result<Self, Error> {
-        /* TODO: support refreshing mappings */
+impl Bindings {
+    pub fn new(conn: &mut Connection) -> Result<Self, Error> {
         let mut keymap = KeyMap::new(conn)?;
 
         let num_lock = keymap.mask(keysym::Num_Lock)?;
         let caps_lock = keymap.mask(keysym::Caps_Lock)?;
         let scroll_lock = keymap.mask(keysym::Scroll_Lock)?;
 
-        Ok(Keys {
-            root: root,
+        Ok(Bindings {
             keymap: keymap,
             num_lock: num_lock,
             caps_lock: caps_lock,
             scroll_lock: scroll_lock,
-            bindings: HashMap::new(),
+            map: HashMap::new(),
         })
     }
 
     #[inline]
-    fn grab(&self, conn: &mut Connection<T>, modifiers: Modifier, keycode: Keycode) -> xcb::VoidCookieChecked {
+    fn grab(&self, conn: &mut Connection, root: x::Window, modifiers: KeyModifier, keycode: Keycode) -> xcb::VoidCookieChecked {
         let m = unsafe { x::ModMask::from_bits_unchecked(modifiers.bits()) };
 
         conn.send_request_checked(&x::GrabKey {
             owner_events: true,
-            grab_window: self.root,
+            grab_window: root,
             modifiers: m,
             key: keycode as u8,
             pointer_mode: x::GrabMode::Async,
@@ -233,57 +172,49 @@ impl<T: Copy> Keys<T> {
         })
     }
 
-    pub fn bind(&mut self, conn: &mut Connection<T>, binding: &Binding<T>) -> Result<(), Error> {
+    pub fn bind(&mut self, conn: &mut Connection, bind: &Bind) -> Result<(), Error> {
         let mut cookies = Vec::with_capacity(8);
 
-        for kc in self.keymap.keycodes(binding.keysym) {
+        for kc in self.keymap.keycodes(bind.keysym) {
 
-            match binding.press {
-                Press::Press => {
-                    self.bindings
-                        .entry((binding.mask, kc, true))
-                        .or_insert(BindingSet::new())
-                        .bind(&binding);
+            match bind.press {
+                KeyPress::Press => {
+                    self.map.entry((bind.root, bind.mask, kc, true))
+                        .or_insert(bind.clone());
                 }
-                Press::Release => {
-                    self.bindings
-                        .entry((binding.mask, kc, false))
-                        .or_insert(BindingSet::new())
-                        .bind(&binding);
+                KeyPress::Release => {
+                    self.map.entry((bind.root, bind.mask, kc, false))
+                        .or_insert(bind.clone());
                 }
-                Press::Both => {
-                    self.bindings
-                        .entry((binding.mask, kc, true))
-                        .or_insert(BindingSet::new())
-                        .bind(&binding);
+                KeyPress::Both => {
+                    self.map.entry((bind.root, bind.mask, kc, true))
+                        .or_insert(bind.clone());
 
-                    self.bindings
-                        .entry((binding.mask, kc, false))
-                        .or_insert(BindingSet::new())
-                        .bind(&binding);
+                    self.map.entry((bind.root, bind.mask, kc, false))
+                        .or_insert(bind.clone());
                 }
             }
 
-            match binding.mask {
-                Modifier::ANY => {
-                    self.grab(conn, Modifier::ANY, kc);
+            match bind.mask {
+                KeyModifier::ANY => {
+                    self.grab(conn, bind.root, bind.mask, kc);
                 }
                 _ => {
-                    let mut cookie = self.grab(conn, binding.mask, kc);
+                    let mut cookie = self.grab(conn, bind.root, bind.mask, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.num_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.num_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.caps_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.caps_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.scroll_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.scroll_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.caps_lock | self.num_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.caps_lock | self.num_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.scroll_lock | self.num_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.scroll_lock | self.num_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.scroll_lock | self.caps_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.scroll_lock | self.caps_lock, kc);
                     cookies.push(cookie);
-                    cookie = self.grab(conn, binding.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
+                    cookie = self.grab(conn, bind.root, bind.mask | self.num_lock | self.scroll_lock | self.caps_lock, kc);
                     cookies.push(cookie);
                 }
             }
@@ -296,19 +227,12 @@ impl<T: Copy> Keys<T> {
         Ok(())
     }
 
-    pub fn get(
-        &self,
-        focus: Option<MonitorId>,
-        mask: x::KeyButMask,
-        k: Keycode,
-        press: bool,
-    ) -> Option<T> {
-        let mut modifiers = unsafe { Modifier::from_bits_unchecked(mask.bits()) };
+    pub fn get(&self, root: x::Window, mask: x::KeyButMask, code: Keycode, press: bool) -> Option<&Bind> {
+        let mut modifiers = unsafe { KeyModifier::from_bits_unchecked(mask.bits()) };
         modifiers.remove(self.num_lock | self.caps_lock | self.scroll_lock);
 
-        self.bindings
-            .get(&(modifiers, k, press))
-            .or_else(|| self.bindings.get(&(Modifier::ANY, k, press)))
-            .and_then(|b| b.get(focus))
+        self.map
+            .get(&(root, modifiers, code, press))
+            .or_else(|| self.map.get(&(root, KeyModifier::ANY, code, press)))
     }
 }

@@ -1,5 +1,6 @@
 #!/bin/bash
 pkill -x Xephyr -15
+
 if [ $? -eq 0 ]; then
     exit 0
 fi

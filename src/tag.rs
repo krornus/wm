@@ -1,28 +1,14 @@
 use std::ops::{Index, IndexMut, BitOr};
 
-use crate::slab::AsIndex;
-
 use slab::{self, Slab};
 use bitvec::prelude::*;
+
+use crate::slab::AsIndex;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct TagSetId {
     inner: usize,
-}
-
-impl AsIndex for TagSetId {
-    fn as_index(&self) -> usize {
-        self.inner
-    }
-}
-
-impl From<usize> for TagSetId {
-    fn from(id: usize) -> TagSetId {
-        TagSetId {
-            inner: id
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -32,85 +18,14 @@ pub enum Tag {
     Toggle(usize),
 }
 
-#[derive(Debug)]
-pub struct TagSet {
-    names: Vec<String>,
-    mask: TagMask,
-}
-
-impl TagSet {
-    pub fn new<T: AsRef<str>>(names: &[T]) -> Self {
-        let names: Vec<String> = names.iter()
-            .map(|x| String::from(x.as_ref()))
-            .collect();
-
-        let mut mask = bitvec![0; names.len()];
-        mask.set(0, true);
-
-        TagSet {
-            names: names,
-            mask: TagMask::from(mask),
-        }
-    }
-
-    pub fn tags<'a>(&'a self) -> TagSetValues<'a> {
-        TagSetValues {
-            index: 0,
-            tagset: self,
-        }
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.names.len()
-    }
-
-    #[inline]
-    pub fn names(&self) -> &[String] {
-        &self.names
-    }
-
-    #[inline]
-    pub fn mask(&self) -> &TagMask {
-        &self.mask
-    }
-
-    #[inline]
-    pub fn mask_mut(&mut self) -> &mut TagMask {
-        &mut self.mask
-    }
-}
-
-pub struct TagSetValues<'a> {
-    index: usize,
-    tagset: &'a TagSet,
-}
-
-impl<'a> Iterator for TagSetValues<'a> {
-    type Item = (&'a str, bool);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.tagset.len() {
-            None
-        } else {
-            let name = &self.tagset.names[self.index];
-            let value = self.tagset.mask.get(self.index);
-            self.index += 1;
-
-            Some((name, value))
-        }
-    }
-}
-
-
 #[derive(Debug, Clone)]
-pub struct TagMask {
+pub struct TagSetMask {
     mask: BitVec,
 }
 
-impl TagMask {
+impl TagSetMask {
     pub fn new() -> Self {
-        TagMask { mask: bitvec![1] }
+        TagSetMask { mask: bitvec![1] }
     }
 
     #[inline]
@@ -159,29 +74,101 @@ impl TagMask {
     }
 
     #[inline]
-    pub fn visible(&self, other: &TagMask) -> bool {
+    pub fn visible(&self, other: &TagSetMask) -> bool {
         /* lazy clone - should be fine. tagsets shouldn't get too big
          * so it should hopefully be similar to a copy */
         (self.mask.clone() & other.mask.clone()).any()
     }
 }
 
-impl From<BitVec> for TagMask {
+impl From<BitVec> for TagSetMask {
     fn from(bv: BitVec) -> Self {
-        TagMask {
+        TagSetMask {
             mask: bv,
         }
     }
 }
 
-impl BitOr<TagMask> for TagMask {
+impl BitOr<TagSetMask> for TagSetMask {
     type Output = Self;
 
     #[inline]
-    fn bitor(self, rhs: TagMask) -> Self::Output {
-        TagMask { mask: self.mask | rhs.mask }
+    fn bitor(self, rhs: TagSetMask) -> Self::Output {
+        TagSetMask { mask: self.mask | rhs.mask }
     }
 }
+
+
+#[derive(Debug)]
+pub struct TagSet {
+    names: Vec<String>,
+    mask: TagSetMask,
+}
+
+impl TagSet {
+    pub fn new<T: AsRef<str>>(names: &[T]) -> Self {
+        let names: Vec<String> = names.iter()
+            .map(|x| String::from(x.as_ref()))
+            .collect();
+
+        let mut mask = bitvec![0; names.len()];
+        mask.set(0, true);
+
+        TagSet {
+            names: names,
+            mask: TagSetMask::from(mask),
+        }
+    }
+
+    pub fn tags<'a>(&'a self) -> TagSetIterator<'a> {
+        TagSetIterator {
+            index: 0,
+            tagset: self,
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    #[inline]
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    #[inline]
+    pub fn mask(&self) -> &TagSetMask {
+        &self.mask
+    }
+
+    #[inline]
+    pub fn mask_mut(&mut self) -> &mut TagSetMask {
+        &mut self.mask
+    }
+}
+
+pub struct TagSetIterator<'a> {
+    index: usize,
+    tagset: &'a TagSet,
+}
+
+impl<'a> Iterator for TagSetIterator<'a> {
+    type Item = (&'a str, bool);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.tagset.len() {
+            None
+        } else {
+            let name = &self.tagset.names[self.index];
+            let value = self.tagset.mask.get(self.index);
+            self.index += 1;
+
+            Some((name, value))
+        }
+    }
+}
+
 
 pub struct Tags {
     tagsets: Slab<TagSet>,
@@ -206,7 +193,7 @@ impl Tags {
         TagSetId { inner: self.tagsets.insert(tagset) }
     }
 
-    pub fn visible(&self, id: TagSetId, selection: &TagMask) -> bool {
+    pub fn visible(&self, id: TagSetId, selection: &TagSetMask) -> bool {
         self.tagsets[id.inner].mask.visible(selection)
     }
 
@@ -260,3 +247,18 @@ impl<'a, 'b> TagSelection<'a, 'b> {
             .map(move |x| (*x, &self.tags.tagsets[x.inner]))
     }
 }
+
+impl AsIndex for TagSetId {
+    fn as_index(&self) -> usize {
+        self.inner
+    }
+}
+
+impl From<usize> for TagSetId {
+    fn from(id: usize) -> TagSetId {
+        TagSetId {
+            inner: id
+        }
+    }
+}
+

@@ -1,3 +1,0 @@
-adapter:
-    Remove? just externally store a reference to a xcb::Connection,
-    pass it as necessary.
